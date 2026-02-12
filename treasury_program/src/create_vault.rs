@@ -1,88 +1,82 @@
-// treasury_program::create_vault — CreateVault instruction handler.
-//
-//! Creates the treasury state PDA (if first time), then chains to the Token
-//! program's `NewFungibleDefinition` instruction to create a new token and
-//! mint the initial supply into the treasury's vault holding PDA.
+//! CreateVault instruction handler.
+//!
+//! Creates/updates the treasury state PDA, then chains to the Token program's
+//! `NewFungibleDefinition` instruction to mint the initial supply into the
+//! treasury's vault holding PDA.
 
-use borsh::BorshSerialize;
-use nssa_core::program::{
-    AccountPostState, AccountState, ChainedCall, ProgramId,
+use nssa_core::{
+    account::{Account, AccountWithMetadata, Data},
+    program::{AccountPostState, ChainedCall, ProgramId},
 };
-use token_core::Instruction as TokenInstruction;
-use treasury_core::{
-    TreasuryState, treasury_state_pda_seed, vault_holding_pda_seed,
-};
+use treasury_core::{TreasuryState, vault_holding_pda_seed};
 
 /// Handle the `CreateVault` instruction.
 ///
-/// **Account layout:**
+/// **Account layout (pre_states):**
 /// 0. `treasury_state` — treasury state PDA (claimed on first call)
-/// 1. `token_definition` — will become the new token definition PDA
-/// 2. `vault_holding` — will receive the initial minted supply
-pub fn handle(
-    _program_id: &ProgramId,
-    accounts: &mut [AccountState],
+/// 1. `token_definition` — uninitialized, will become the new token def (claimed by Token program)
+/// 2. `vault_holding` — uninitialized, will receive minted tokens (claimed by Token program)
+pub fn create_vault(
+    treasury_state: AccountWithMetadata,
+    token_definition: AccountWithMetadata,
+    vault_holding: AccountWithMetadata,
     token_name: String,
     initial_supply: u128,
-    treasury_program_id: &ProgramId,
-    token_program_id: &ProgramId,
-) -> (Vec<AccountState>, Option<ChainedCall>) {
-    assert!(accounts.len() >= 3, "CreateVault requires 3 accounts");
-
-    // -- 1. Treasury state PDA --------------------------------------------------
-    let treasury_state_account = &mut accounts[0];
-
-    // Deserialize existing state or start fresh.
-    let mut state: TreasuryState = if treasury_state_account.data.is_empty() {
+    _treasury_program_id: ProgramId,
+    token_program_id: ProgramId,
+) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+    // -- 1. Update treasury state -----------------------------------------------
+    let mut state: TreasuryState = if treasury_state.account == Account::default() {
         TreasuryState::default()
     } else {
-        borsh::from_slice(&treasury_state_account.data)
-            .expect("failed to deserialize TreasuryState")
+        borsh::from_slice(treasury_state.account.data.as_ref())
+            .expect("Failed to deserialize TreasuryState")
     };
 
     state.vault_count += 1;
 
-    // Update the account data.
-    treasury_state_account.data = borsh::to_vec(&state).unwrap();
-    // Claim on first use; no-op if already claimed.
-    treasury_state_account.post_state = AccountPostState::new_claimed_if_default();
+    let mut treasury_post = treasury_state.account.clone();
+    let state_bytes = borsh::to_vec(&state).expect("Failed to serialize TreasuryState");
+    treasury_post.data = Data::try_from(state_bytes).expect("TreasuryState should fit in Data");
 
-    // -- 2. Token definition PDA ------------------------------------------------
-    let token_definition = &mut accounts[1];
-    token_definition.post_state = AccountPostState::new_claimed();
-
-    // -- 3. Vault holding PDA ---------------------------------------------------
-    let mut vault_holding = accounts[2].clone();
-    vault_holding.is_authorized = true; // authorize so Token program can write to it
-    vault_holding.post_state = AccountPostState::new_claimed();
-
-    // -- 4. Build the chained call to the Token program -------------------------
-    //
-    // We invoke Token::NewFungibleDefinition which creates the token and mints
-    // the initial supply into `vault_holding`.
-    let token_instruction = TokenInstruction::NewFungibleDefinition {
-        name: token_name,
-        initial_supply,
-        receiver: vault_holding.id,
+    let treasury_post_state = if treasury_state.account == Account::default() {
+        AccountPostState::new_claimed(treasury_post)
+    } else {
+        AccountPostState::new(treasury_post)
     };
 
-    let token_ix_data = borsh::to_vec(&token_instruction).unwrap();
+    // -- 2. Build chained call to Token::NewFungibleDefinition ------------------
+    //
+    // The Token program will:
+    //   - Create the token definition (claims token_definition account)
+    //   - Mint initial_supply into vault_holding (claims vault_holding account)
+    //
+    // We authorize the vault_holding PDA by providing its seed so the Token
+    // program sees it as authorized when it tries to write.
 
-    // The chained call needs the token_definition and vault_holding accounts.
-    let chained_accounts = vec![
-        accounts[1].clone(), // token_definition
-        vault_holding,       // vault_holding (authorized)
-    ];
+    // Prepare the vault_holding with is_authorized = true for the chained call
+    let mut vault_for_chain = vault_holding.clone();
+    vault_for_chain.is_authorized = true;
 
     let chained_call = ChainedCall::new(
-        token_program_id.clone(),
-        token_ix_data,
-        chained_accounts,
+        token_program_id,
+        vec![token_definition.clone(), vault_for_chain],
+        &token_core::Instruction::NewFungibleDefinition {
+            name: token_name,
+            total_supply: initial_supply,
+        },
     )
-    // Authorize the vault holding PDA so the Token program accepts writes.
-    .with_pda_seeds(vec![vault_holding_pda_seed(&accounts[1].id)]);
+    .with_pda_seeds(vec![vault_holding_pda_seed(&token_definition.account_id)]);
 
-    // Return updated accounts and the chained call.
-    let updated_accounts = vec![accounts[0].clone()];
-    (updated_accounts, Some(chained_call))
+    // -- 3. Return post states + chained calls ----------------------------------
+    //
+    // We only modify the treasury_state. The token_definition and vault_holding
+    // are passed unchanged — the Token program will modify them in the chained call.
+    let post_states = vec![
+        treasury_post_state,
+        AccountPostState::new(token_definition.account.clone()),
+        AccountPostState::new(vault_holding.account.clone()),
+    ];
+
+    (post_states, vec![chained_call])
 }

@@ -4,7 +4,8 @@
 //! used by both the on-chain guest program and off-chain tooling.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use nssa_core::program::{AccountId, PdaSeed, ProgramId};
+use nssa_core::account::AccountId;
+use nssa_core::program::{PdaSeed, ProgramId};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Instructions that the Treasury program understands.
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Instruction {
     /// Create a new vault for a token.
     ///
@@ -71,35 +72,44 @@ pub struct TreasuryState {
 // PDA derivation helpers
 // ---------------------------------------------------------------------------
 
-/// Seed used to derive the treasury state PDA.
-pub const TREASURY_STATE_SEED: &[u8] = b"treasury_state";
+/// Fixed 32-byte seed used to derive the treasury state PDA.
+/// Padded with zeroes to fill 32 bytes.
+const TREASURY_STATE_SEED: [u8; 32] = {
+    let mut seed = [0u8; 32];
+    let tag = b"treasury_state";
+    let mut i = 0;
+    while i < tag.len() {
+        seed[i] = tag[i];
+        i += 1;
+    }
+    seed
+};
 
 /// Compute the treasury state PDA account ID.
 ///
-/// `account_id = hash(treasury_program_id || "treasury_state")`
+/// `account_id = PDA(treasury_program_id, TREASURY_STATE_SEED)`
 pub fn compute_treasury_state_pda(treasury_program_id: &ProgramId) -> AccountId {
-    let seed = TREASURY_STATE_SEED;
-    AccountId::compute_pda(treasury_program_id, seed)
+    AccountId::from((treasury_program_id, &treasury_state_pda_seed()))
 }
 
 /// Compute the vault holding PDA account ID for a given token definition.
 ///
-/// `account_id = hash(treasury_program_id || token_definition_id)`
+/// `account_id = PDA(treasury_program_id, token_definition_id_bytes)`
 pub fn compute_vault_holding_pda(
     treasury_program_id: &ProgramId,
     token_definition_id: &AccountId,
 ) -> AccountId {
-    let seed = token_definition_id.as_bytes();
-    AccountId::compute_pda(treasury_program_id, seed)
+    AccountId::from((treasury_program_id, &vault_holding_pda_seed(token_definition_id)))
 }
 
-/// Build the [`PdaSeed`] for the treasury state PDA so it can be authorized
-/// in chained calls.
+/// Build the [`PdaSeed`] for the treasury state PDA so it can be provided
+/// in chained calls for authorization.
 pub fn treasury_state_pda_seed() -> PdaSeed {
-    PdaSeed(TREASURY_STATE_SEED.to_vec())
+    PdaSeed::new(TREASURY_STATE_SEED)
 }
 
 /// Build the [`PdaSeed`] for a vault holding PDA.
+/// Uses the token definition's AccountId bytes as the seed.
 pub fn vault_holding_pda_seed(token_definition_id: &AccountId) -> PdaSeed {
-    PdaSeed(token_definition_id.as_bytes().to_vec())
+    PdaSeed::new(*token_definition_id.value())
 }

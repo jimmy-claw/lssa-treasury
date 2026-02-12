@@ -1,30 +1,77 @@
-// Guest binary entry point for the Treasury program.
-//
-// This runs inside the Risc0 zkVM. It reads the program inputs from the
-// host, dispatches to the treasury_program logic, and writes outputs
-// (updated accounts + optional chained call) back to the host.
+//! The Treasury Program — guest binary entry point.
+//!
+//! This is compiled to RISC-V and executed inside the Risc0 zkVM.
 
-#![no_main]
-
-use borsh::BorshDeserialize;
-use nssa_core::program::{read_nssa_inputs, write_nssa_outputs, write_nssa_outputs_with_chained_call};
-
-risc0_zkvm::guest::entry!(main);
+use nssa_core::program::{ProgramInput, read_nssa_inputs, write_nssa_outputs_with_chained_call};
+use treasury_core::Instruction;
 
 fn main() {
-    // Read standardized program inputs from the zkVM host.
-    let mut program_input = read_nssa_inputs();
+    let (
+        ProgramInput {
+            pre_states,
+            instruction,
+        },
+        instruction_words,
+    ) = read_nssa_inputs::<Instruction>();
 
-    // Dispatch to treasury program logic.
-    let (updated_accounts, chained_call) = treasury_program::process(
-        &program_input.program_id,
-        &mut program_input.accounts,
-        &program_input.input_data,
+    let pre_states_clone = pre_states.clone();
+
+    let (post_states, chained_calls) = match instruction {
+        Instruction::CreateVault {
+            token_name,
+            initial_supply,
+            treasury_program_id,
+            token_program_id,
+        } => {
+            let [treasury_state, token_definition, vault_holding] = pre_states
+                .try_into()
+                .expect("CreateVault requires exactly 3 accounts");
+            treasury_program::create_vault::create_vault(
+                treasury_state,
+                token_definition,
+                vault_holding,
+                token_name,
+                initial_supply,
+                treasury_program_id,
+                token_program_id,
+            )
+        }
+        Instruction::Send {
+            amount,
+            token_program_id,
+        } => {
+            let [treasury_state, vault_holding, recipient_holding] = pre_states
+                .try_into()
+                .expect("Send requires exactly 3 accounts");
+            treasury_program::send::send(
+                treasury_state,
+                vault_holding,
+                recipient_holding,
+                amount,
+                token_program_id,
+            )
+        }
+        Instruction::Deposit {
+            amount,
+            token_program_id,
+        } => {
+            let [treasury_state, sender_holding, vault_holding] = pre_states
+                .try_into()
+                .expect("Deposit requires exactly 3 accounts");
+            treasury_program::receive::deposit(
+                treasury_state,
+                sender_holding,
+                vault_holding,
+                amount,
+                token_program_id,
+            )
+        }
+    };
+
+    write_nssa_outputs_with_chained_call(
+        instruction_words,
+        pre_states_clone,
+        post_states,
+        chained_calls,
     );
-
-    // Write outputs back to the host.
-    match chained_call {
-        Some(call) => write_nssa_outputs_with_chained_call(updated_accounts, call),
-        None => write_nssa_outputs(updated_accounts),
-    }
 }

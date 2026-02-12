@@ -1,80 +1,70 @@
-// Example: Deploy the Treasury program and create a vault.
-//
-// This example shows how to:
-// 1. Build the program image from the guest ELF
-// 2. Deploy it to the NSSA runtime
-// 3. Call CreateVault to create a new token + vault
-//
-// NOTE: This is a conceptual example. Actual deployment requires a running
-// NSSA node and the correct RPC setup.
+//! Example: Deploy the Treasury program and create a vault.
+//!
+//! Usage:
+//!   cargo run --bin deploy_and_create_vault \
+//!     <path/to/treasury.bin> \
+//!     <treasury_state_account_id> \
+//!     <token_definition_account_id> \
+//!     <vault_holding_account_id>
+//!
+//! The account IDs for the PDAs should be computed off-chain using
+//! `treasury_core::compute_treasury_state_pda` and
+//! `treasury_core::compute_vault_holding_pda`.
 
-use borsh::BorshSerialize;
-use nssa_core::program::{AccountId, AccountState, ProgramId, ProgramInput};
-use treasury_core::{
-    Instruction, compute_treasury_state_pda, compute_vault_holding_pda,
+use nssa::{
+    AccountId, PublicTransaction,
+    program::Program,
+    public_transaction::{Message, WitnessSet},
 };
+use wallet::WalletCore;
 
-fn main() {
-    println!("=== Treasury: Deploy and Create Vault ===\n");
+#[tokio::main]
+async fn main() {
+    // Initialize wallet
+    let wallet_core = WalletCore::from_env().unwrap();
 
-    // --- Step 1: Define program IDs ---
-    // In a real deployment, the treasury_program_id comes from deploying the
-    // guest ELF binary. Here we use a placeholder.
-    let treasury_program_id = ProgramId::from_bytes(&[1u8; 32]);
-    let token_program_id = ProgramId::from_bytes(&[2u8; 32]);
+    // Parse arguments
+    let program_path = std::env::args_os().nth(1).unwrap().into_string().unwrap();
+    let treasury_state_id: AccountId = std::env::args_os()
+        .nth(2).unwrap().into_string().unwrap().parse().unwrap();
+    let token_def_id: AccountId = std::env::args_os()
+        .nth(3).unwrap().into_string().unwrap().parse().unwrap();
+    let vault_holding_id: AccountId = std::env::args_os()
+        .nth(4).unwrap().into_string().unwrap().parse().unwrap();
 
-    println!("Treasury Program ID: {:?}", treasury_program_id);
-    println!("Token Program ID:    {:?}", token_program_id);
+    // Load the treasury program
+    let bytecode: Vec<u8> = std::fs::read(&program_path).unwrap();
+    let program = Program::new(bytecode).unwrap();
 
-    // --- Step 2: Derive PDA account IDs ---
-    let treasury_state_id = compute_treasury_state_pda(&treasury_program_id);
-    println!("\nTreasury State PDA:  {:?}", treasury_state_id);
+    println!("Treasury program ID: {:?}", program.id());
 
-    // For the token definition, we'd normally get this from the Token program.
-    // Here we use a placeholder to show the derivation.
-    let token_definition_id = AccountId::from_bytes(&[3u8; 32]);
-    let vault_holding_id =
-        compute_vault_holding_pda(&treasury_program_id, &token_definition_id);
-    println!("Vault Holding PDA:   {:?}", vault_holding_id);
+    // Build the CreateVault instruction
+    // The token program ID needs to be known ahead of time (from deploying the token program)
+    let token_program_id = [0u32; 8]; // TODO: replace with actual token program ID
 
-    // --- Step 3: Build the CreateVault instruction ---
-    let instruction = Instruction::CreateVault {
+    let instruction = treasury_core::Instruction::CreateVault {
         token_name: "TreasuryToken".to_string(),
         initial_supply: 1_000_000,
-        treasury_program_id: treasury_program_id.clone(),
-        token_program_id: token_program_id.clone(),
+        treasury_program_id: program.id(),
+        token_program_id,
     };
 
-    let ix_data = borsh::to_vec(&instruction).expect("serialize instruction");
-    println!("\nInstruction data ({} bytes): {:?}", ix_data.len(), &ix_data[..20]);
+    let greeting = risc0_zkvm::serde::to_vec(&instruction).unwrap();
+    let greeting_bytes: Vec<u8> = greeting.iter().flat_map(|w| w.to_le_bytes()).collect();
 
-    // --- Step 4: Build the accounts list ---
-    let accounts = vec![
-        AccountState::new(treasury_state_id),   // treasury state PDA
-        AccountState::new(token_definition_id), // token definition PDA
-        AccountState::new(vault_holding_id),    // vault holding PDA
-    ];
+    // Build and submit the transaction
+    let account_ids = vec![treasury_state_id, token_def_id, vault_holding_id];
+    let nonces = vec![];
+    let signing_keys = [];
+    let message = Message::try_new(program.id(), account_ids, nonces, greeting_bytes).unwrap();
+    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let tx = PublicTransaction::new(message, witness_set);
 
-    // --- Step 5: Build ProgramInput ---
-    let program_input = ProgramInput {
-        program_id: treasury_program_id,
-        accounts,
-        input_data: ix_data,
-    };
+    let _response = wallet_core
+        .sequencer_client
+        .send_tx_public(tx)
+        .await
+        .unwrap();
 
-    println!("\nProgramInput built successfully.");
-    println!("Accounts: {}", program_input.accounts.len());
-    println!(
-        "In a real deployment, this would be submitted to the NSSA runtime \
-         which would execute the guest binary inside the zkVM."
-    );
-
-    // --- Step 6: What happens next ---
-    println!("\n--- What happens inside the zkVM ---");
-    println!("1. Guest binary reads ProgramInput");
-    println!("2. treasury_program::process() dispatches to create_vault::handle()");
-    println!("3. TreasuryState is initialized (vault_count = 1)");
-    println!("4. A ChainedCall to Token::NewFungibleDefinition is returned");
-    println!("5. The runtime executes the chained call in the Token program");
-    println!("6. Token program creates the definition and mints to vault PDA");
+    println!("CreateVault transaction submitted!");
 }

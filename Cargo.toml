@@ -4,6 +4,8 @@ members = [
     "treasury_core",
     "treasury_program",
     "methods",
-    "methods/guest",
     "examples/program_deployment",
+]
+exclude = [
+    "methods/guest",
 ]

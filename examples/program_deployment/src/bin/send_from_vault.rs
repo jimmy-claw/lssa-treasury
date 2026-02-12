@@ -1,72 +1,64 @@
-// Example: Send tokens from a treasury vault to a recipient.
-//
-// This example shows how to:
-// 1. Derive the vault holding PDA for a given token
-// 2. Build a Send instruction
-// 3. Construct the ProgramInput with the correct account layout
-//
-// NOTE: This is a conceptual example. Actual execution requires a running
-// NSSA node.
+//! Example: Send tokens from the treasury vault to a recipient.
+//!
+//! Usage:
+//!   cargo run --bin send_from_vault \
+//!     <path/to/treasury.bin> \
+//!     <treasury_state_account_id> \
+//!     <vault_holding_account_id> \
+//!     <recipient_account_id> \
+//!     <amount>
 
-use borsh::BorshSerialize;
-use nssa_core::program::{AccountId, AccountState, ProgramId, ProgramInput};
-use treasury_core::{
-    Instruction, compute_treasury_state_pda, compute_vault_holding_pda,
+use nssa::{
+    AccountId, PublicTransaction,
+    program::Program,
+    public_transaction::{Message, WitnessSet},
 };
+use wallet::WalletCore;
 
-fn main() {
-    println!("=== Treasury: Send From Vault ===\n");
+#[tokio::main]
+async fn main() {
+    // Initialize wallet
+    let wallet_core = WalletCore::from_env().unwrap();
 
-    // --- Program IDs (would come from deployment) ---
-    let treasury_program_id = ProgramId::from_bytes(&[1u8; 32]);
-    let token_program_id = ProgramId::from_bytes(&[2u8; 32]);
+    // Parse arguments
+    let program_path = std::env::args_os().nth(1).unwrap().into_string().unwrap();
+    let treasury_state_id: AccountId = std::env::args_os()
+        .nth(2).unwrap().into_string().unwrap().parse().unwrap();
+    let vault_holding_id: AccountId = std::env::args_os()
+        .nth(3).unwrap().into_string().unwrap().parse().unwrap();
+    let recipient_id: AccountId = std::env::args_os()
+        .nth(4).unwrap().into_string().unwrap().parse().unwrap();
+    let amount: u128 = std::env::args_os()
+        .nth(5).unwrap().into_string().unwrap().parse().unwrap();
 
-    // --- Derive accounts ---
-    let treasury_state_id = compute_treasury_state_pda(&treasury_program_id);
-    let token_definition_id = AccountId::from_bytes(&[3u8; 32]);
-    let vault_holding_id =
-        compute_vault_holding_pda(&treasury_program_id, &token_definition_id);
+    // Load the treasury program
+    let bytecode: Vec<u8> = std::fs::read(&program_path).unwrap();
+    let program = Program::new(bytecode).unwrap();
 
-    // Recipient is an arbitrary account (e.g., a user's token holding).
-    let recipient_id = AccountId::from_bytes(&[4u8; 32]);
+    // Build the Send instruction
+    let token_program_id = [0u32; 8]; // TODO: replace with actual token program ID
 
-    println!("Vault Holding PDA: {:?}", vault_holding_id);
-    println!("Recipient:         {:?}", recipient_id);
-
-    // --- Build Send instruction ---
-    let instruction = Instruction::Send {
-        amount: 500,
-        token_program_id: token_program_id.clone(),
+    let instruction = treasury_core::Instruction::Send {
+        amount,
+        token_program_id,
     };
 
-    let ix_data = borsh::to_vec(&instruction).expect("serialize instruction");
+    let greeting = risc0_zkvm::serde::to_vec(&instruction).unwrap();
+    let greeting_bytes: Vec<u8> = greeting.iter().flat_map(|w| w.to_le_bytes()).collect();
 
-    // --- Build accounts ---
-    // The treasury program expects:
-    //   [0] treasury_state (PDA)
-    //   [1] vault_holding (PDA, will be authorized by treasury)
-    //   [2] recipient_holding
-    let accounts = vec![
-        AccountState::new(treasury_state_id),
-        AccountState::new(vault_holding_id),
-        AccountState::new(recipient_id),
-    ];
+    // Build and submit the transaction
+    let account_ids = vec![treasury_state_id, vault_holding_id, recipient_id];
+    let nonces = vec![];
+    let signing_keys = [];
+    let message = Message::try_new(program.id(), account_ids, nonces, greeting_bytes).unwrap();
+    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let tx = PublicTransaction::new(message, witness_set);
 
-    let program_input = ProgramInput {
-        program_id: treasury_program_id,
-        accounts,
-        input_data: ix_data,
-    };
+    let _response = wallet_core
+        .sequencer_client
+        .send_tx_public(tx)
+        .await
+        .unwrap();
 
-    println!("\nProgramInput built for Send instruction.");
-    println!("Amount: 500 tokens");
-    println!("Accounts: {}", program_input.accounts.len());
-
-    println!("\n--- What happens inside the zkVM ---");
-    println!("1. Guest binary reads ProgramInput");
-    println!("2. treasury_program::process() dispatches to send::handle()");
-    println!("3. vault_holding.is_authorized = true (treasury authorizes its PDA)");
-    println!("4. A ChainedCall to Token::Transfer is returned");
-    println!("5. The runtime executes the transfer: vault → recipient");
-    println!("6. PDA seed proves the treasury owns the vault account");
+    println!("Send transaction submitted! Sent {} tokens from vault.", amount);
 }
