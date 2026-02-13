@@ -1,28 +1,22 @@
-//! Treasury program — on-chain logic for PDA demonstration with Token integration.
-
-pub mod create_vault;
-pub mod send;
-pub mod deposit;
-
-pub use treasury_core::{Instruction, get_variant, VARIANT_CREATE_VAULT, VARIANT_SEND, VARIANT_DEPOSIT};
+//! Treasury program — on-chain logic for PDA demonstration.
+//! This version is a noop that just passes through accounts.
 
 use nssa_core::account::AccountWithMetadata;
 use nssa_core::program::ProgramOutput;
 
-/// Dispatch incoming instructions to their handlers.
+/// Simple pass-through that just returns accounts unchanged.
 pub fn process(
     accounts: &mut [AccountWithMetadata],
-    instruction: &Instruction,
+    _instruction: &(),
 ) -> ProgramOutput {
-    match get_variant(*instruction) {
-        VARIANT_CREATE_VAULT => create_vault::handle(accounts, *instruction),
-        VARIANT_SEND => send::handle(accounts, *instruction),
-        VARIANT_DEPOSIT => deposit::handle(accounts, *instruction),
-        _ => ProgramOutput {
-            instruction_data: vec![],
-            pre_states: accounts.to_vec(),
-            post_states: vec![],
-            chained_calls: vec![],
-        }
+    let post_states = accounts.iter()
+        .map(|a| nssa_core::program::AccountPostState::new(a.account.clone()))
+        .collect();
+    
+    ProgramOutput {
+        instruction_data: vec![],
+        pre_states: accounts.to_vec(),
+        post_states,
+        chained_calls: vec![],
     }
 }

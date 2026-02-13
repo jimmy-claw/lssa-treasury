@@ -1,11 +1,11 @@
-//! Example: Deploy the Treasury program and create a vault.
+//! Example: Deploy the Treasury program - simple noop test.
 
 use nssa::{
     AccountId, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
-use treasury_core::{compute_treasury_state_pda, compute_vault_holding_pda, Instruction};
+use treasury_core::compute_treasury_state_pda;
 use wallet::WalletCore;
 
 #[tokio::main]
@@ -17,13 +17,8 @@ async fn main() {
         .expect("Usage: deploy_and_create_vault <treasury.bin> <token.bin> <token_def_account_id>")
         .into_string()
         .unwrap();
-    let token_bin_path = std::env::args_os()
-        .nth(2)
-        .expect("Missing <token.bin> path")
-        .into_string()
-        .unwrap();
     let token_def_id: AccountId = std::env::args_os()
-        .nth(3)
+        .nth(2)
         .expect("Missing <token_definition_account_id>")
         .into_string()
         .unwrap()
@@ -34,23 +29,16 @@ async fn main() {
     let treasury_program = Program::new(treasury_bytecode).unwrap();
     let treasury_program_id = treasury_program.id();
 
-    let token_bytecode: Vec<u8> = std::fs::read(&token_bin_path).unwrap();
-    let token_program = Program::new(token_bytecode).unwrap();
-    let token_program_id = token_program.id();
-
     let treasury_state_id = compute_treasury_state_pda(&treasury_program_id);
-    let vault_holding_id = compute_vault_holding_pda(&treasury_program_id, &token_def_id);
 
     println!("Treasury program ID:    {:?}", treasury_program_id);
-    println!("Token program ID:       {:?}", token_program_id);
     println!("Treasury state PDA:     {}", treasury_state_id);
     println!("Token definition:       {}", token_def_id);
-    println!("Vault holding PDA:      {}", vault_holding_id);
 
-    // Simple u128 instruction - just test execution first
-    let instruction = treasury_core::create_vault_instruction("Test", 1000, token_program_id);
+    // Send empty instruction - just test execution
+    let instruction: Vec<u8> = vec![];
 
-    let account_ids = vec![treasury_state_id, token_def_id, vault_holding_id];
+    let account_ids = vec![treasury_state_id, token_def_id];
     let nonces = vec![];
     let signing_keys = [];
     let message = Message::try_new(treasury_program_id, account_ids, nonces, instruction).unwrap();
@@ -63,5 +51,5 @@ async fn main() {
         .await
         .unwrap();
 
-    println!("\n✅ CreateVault transaction submitted!");
+    println!("\n✅ Test transaction submitted!");
 }
