@@ -12,7 +12,7 @@ async fn main() {
 
     // Args: <treasury.bin> <token.bin> <token_def_account_id>
     let treasury_path = std::env::args_os().nth(1)
-        .expect("Usage: deploy_and_create_vault <treasury.bin> <token.bin> <token_def_id> <signer_id>")
+        .expect("Usage: deploy_and_create_vault <treasury.bin> <token.bin> <token_def_id> <signer_id> [<signer_id_2> ...]")
         .into_string().unwrap();
     let token_path = std::env::args_os().nth(2)
         .expect("Missing <token.bin> path")
@@ -41,25 +41,37 @@ async fn main() {
     println!("Token definition:       {}", token_def_id);
     println!("Vault holding PDA:      {}", vault_holding_id);
 
-    // The signer account is the authorized account for future Send instructions.
-    // For now, use the token_def_id as the authorized signer (replace with your actual signer).
-    let signer_id: AccountId = std::env::args_os()
-        .nth(4)
-        .expect("Missing <signer_account_id> — the account authorized to send from the vault")
-        .into_string().unwrap()
-        .parse().unwrap();
+    // All remaining args (from position 4 onward) are authorized signer account IDs.
+    // Any of these accounts can authorize Send instructions.
+    let authorized_signers: Vec<AccountId> = std::env::args_os()
+        .skip(4)
+        .map(|arg| arg.into_string().unwrap().parse::<AccountId>().expect("Invalid signer account ID"))
+        .collect();
 
-    println!("Authorized signer:      {}", signer_id);
+    if authorized_signers.is_empty() {
+        eprintln!("Usage: deploy_and_create_vault <treasury.bin> <token.bin> <token_def_id> <signer_id> [<signer_id_2> ...]");
+        eprintln!("At least one authorized signer is required.");
+        std::process::exit(1);
+    }
+
+    println!("Authorized signers ({}):", authorized_signers.len());
+    for (i, s) in authorized_signers.iter().enumerate() {
+        println!("  [{}] {}", i, s);
+    }
 
     // Build the CreateVault instruction
     let mut token_name = [0u8; 6];
     token_name[..4].copy_from_slice(b"TRSY");
 
+    let authorized_accounts: Vec<[u8; 32]> = authorized_signers.iter()
+        .map(|id| *id.value())
+        .collect();
+
     let instruction = Instruction::CreateVault {
         token_name,
         initial_supply: 1_000_000,
         token_program_id,
-        authorized_accounts: vec![*signer_id.value()],
+        authorized_accounts,
     };
 
     // Message::try_new handles risc0 serialization internally

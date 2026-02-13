@@ -90,7 +90,7 @@ setup: ## Create accounts needed for treasury operations
 	@echo "   TOKEN_DEF_ID=$(TOKEN_DEF_ID)"
 	@echo "   SIGNER_ID=$(SIGNER_ID)"
 
-create-vault: ## Create a vault (mints tokens into treasury PDA)
+create-vault: ## Create a vault (mints tokens into treasury PDA). SIGNERS="id1 id2" for multiple.
 	$(call require_state,TOKEN_DEF_ID)
 	$(call require_state,SIGNER_ID)
 	@test -f "$(TREASURY_BIN)" || (echo "ERROR: Treasury binary not found. Run 'make build' first."; exit 1)
@@ -99,7 +99,7 @@ create-vault: ## Create a vault (mints tokens into treasury PDA)
 		../../$(TREASURY_BIN) \
 		$(TOKEN_BIN) \
 		$(TOKEN_DEF_ID) \
-		$(SIGNER_ID)
+		$(SIGNER_ID) $(EXTRA_SIGNERS)
 
 send: ## Send tokens from vault (RECIPIENT=<id> AMOUNT=<n>)
 	@if [ -z "$(RECIPIENT)" ]; then echo "Usage: make send RECIPIENT=<account_id> AMOUNT=<n>"; exit 1; fi
