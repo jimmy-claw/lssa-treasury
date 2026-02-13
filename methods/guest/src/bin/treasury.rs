@@ -1,7 +1,5 @@
 //! Treasury guest binary — entry point for the Risc0 zkVM.
 
-#![no_main]
-
 use nssa_core::program::{read_nssa_inputs, write_nssa_outputs_with_chained_call};
 use treasury_program;
 
