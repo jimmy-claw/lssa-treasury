@@ -77,24 +77,29 @@ async fn main() {
     println!("Amount:                 {}", amount);
 
     // Build the Send instruction
-    let instruction = Instruction::Send {
-        amount,
-        token_program_id,
-    };
+    // Serialize instruction to bytes, then convert to u32 words
+    let instruction_bytes = borsh::to_vec(&instruction).unwrap();
+    let instruction_data: Vec<u32> = instruction_bytes
+        .chunks(4)
+        .map(|chunk| {
+            let mut word = [0u8; 4];
+            word.copy_from_slice(chunk);
+            u32::from_le_bytes(word)
+        })
+        .collect();
 
     // Build and submit the transaction
     let account_ids = vec![treasury_state_id, vault_holding_id, recipient_id];
     let nonces = vec![];
     let signing_keys = [];
 
-    // Message::try_new serializes automatically
-    let message = Message::try_new(
+    // Use new_preserialized to avoid double serialization
+    let message = Message::new_preserialized(
         treasury_program_id,
         account_ids,
         nonces,
-        instruction,
-    )
-    .unwrap();
+        instruction_data,
+    );
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
