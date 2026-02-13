@@ -264,13 +264,76 @@ The compiled ELF will be in `target/riscv32im-risc0-zkvm-elf/docker/treasury.bin
 cd /path/to/lssa/sequencer_runner
 RUST_LOG=info cargo run $(pwd)/configs/debug
 
-# 2. Deploy the treasury program
-wallet deploy-program /path/to/treasury.bin
+# 2. Install the wallet CLI (from the lssa repo root)
+cargo install --path wallet --force
 
-# 3. Run the example
-cd examples/program_deployment
-cargo run --bin deploy_and_create_vault /path/to/treasury.bin <account_ids...>
+# 3. Deploy the treasury + token programs
+export PROGRAMS_DIR=$(pwd)/target/riscv32im-risc0-zkvm-elf/docker
+wallet deploy-program $PROGRAMS_DIR/treasury.bin
+wallet deploy-program $PROGRAMS_DIR/token.bin    # from lssa repo build
 ```
+
+### CreateVault — create a token + mint into treasury vault
+
+This instruction needs **3 accounts** (all PDAs, computed deterministically):
+
+| # | Account | What it is | How to get the ID |
+|---|---------|-----------|-------------------|
+| 0 | `treasury_state` | Treasury metadata PDA | `compute_treasury_state_pda(treasury_program_id)` |
+| 1 | `token_definition` | New token definition (uninitialized) | `wallet account new public` |
+| 2 | `vault_holding` | Vault for minted tokens (PDA) | `compute_vault_holding_pda(treasury_program_id, token_def_id)` |
+
+```bash
+# Create a public account for the token definition
+wallet account new public
+# Output: Generated new account with account_id Public/<TOKEN_DEF_ID>
+
+# Run CreateVault (the runner computes PDA IDs internally)
+cd examples/program_deployment
+cargo run --bin deploy_and_create_vault \
+    $PROGRAMS_DIR/treasury.bin \
+    <TREASURY_STATE_PDA_ID> \
+    <TOKEN_DEF_ID> \
+    <VAULT_HOLDING_PDA_ID>
+```
+
+> **Note:** The treasury_state and vault_holding PDA IDs are deterministic — they can be computed
+> off-chain using `treasury_core::compute_treasury_state_pda()` and
+> `treasury_core::compute_vault_holding_pda()`. The example runner should ideally compute these
+> automatically (TODO).
+
+### Send — transfer tokens from vault to a recipient
+
+This instruction needs **3 accounts:**
+
+| # | Account | What it is |
+|---|---------|-----------|
+| 0 | `treasury_state` | Treasury metadata PDA (same as above) |
+| 1 | `vault_holding` | Vault PDA holding tokens |
+| 2 | `recipient_holding` | Recipient's token holding account |
+
+```bash
+# Create a recipient account
+wallet account new public
+# Output: Generated new account with account_id Public/<RECIPIENT_ID>
+
+cargo run --bin send_from_vault \
+    $PROGRAMS_DIR/treasury.bin \
+    <TREASURY_STATE_PDA_ID> \
+    <VAULT_HOLDING_PDA_ID> \
+    <RECIPIENT_ID> \
+    100   # amount to send
+```
+
+### Deposit — receive tokens into the vault from an external sender
+
+This instruction needs **3 accounts:**
+
+| # | Account | What it is |
+|---|---------|-----------|
+| 0 | `treasury_state` | Treasury metadata PDA |
+| 1 | `sender_holding` | Sender's token holding (authorized by user signature) |
+| 2 | `vault_holding` | Vault PDA receiving tokens |
 
 ## Chained Call Flow
 
