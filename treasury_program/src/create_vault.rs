@@ -2,8 +2,7 @@
 
 use borsh::BorshDeserialize;
 use nssa_core::account::AccountWithMetadata;
-use nssa_core::program::{AccountPostState, ChainedCall, InstructionData, PdaSeed, ProgramOutput};
-use nssa::program::Program;
+use nssa_core::program::{AccountPostState, ChainedCall, InstructionData, PdaSeed, ProgramId, ProgramOutput};
 use treasury_core::TreasuryState;
 
 /// Token instruction: [0x00 || total_supply (16 bytes LE) || name (6 bytes)]
@@ -32,6 +31,7 @@ pub fn handle(
     accounts: &mut [AccountWithMetadata],
     token_name: &str,
     initial_supply: u128,
+    token_program_id: &ProgramId,
 ) -> ProgramOutput {
     if accounts.len() != 3 {
         return ProgramOutput {
@@ -55,7 +55,6 @@ pub fn handle(
     accounts[0].account.data = borsh::to_vec(&state).unwrap().try_into().unwrap();
 
     // Build chained call to Token program
-    let token_program_id = Program::token().id();
     let instruction_data = build_token_instruction(initial_supply, token_name);
     
     // For the chained call, we need AccountWithMetadata
@@ -66,7 +65,7 @@ pub fn handle(
     let vault_pda_seed = PdaSeed::new(*vault_id.value());
     
     let chained_call = ChainedCall {
-        program_id: token_program_id,
+        program_id: *token_program_id,
         instruction_data,
         pre_states: vec![token_def_meta, vault_meta],
         pda_seeds: vec![vault_pda_seed],

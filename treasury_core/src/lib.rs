@@ -24,18 +24,24 @@ pub enum Instruction {
         token_name: String,
         /// Initial supply to mint
         initial_supply: u128,
+        /// The token program ID to chain to
+        token_program_id: ProgramId,
     },
 
     /// Send tokens from the treasury vault to a recipient.
     Send {
         /// Amount to send
         amount: u128,
+        /// The token program ID to chain to
+        token_program_id: ProgramId,
     },
 
     /// Deposit tokens into the treasury vault from an external sender.
     Deposit {
         /// Amount to deposit
         amount: u128,
+        /// The token program ID to chain to
+        token_program_id: ProgramId,
     },
 }
 

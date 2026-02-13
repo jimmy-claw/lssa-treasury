@@ -3,6 +3,7 @@
 //! Usage:
 //!   cargo run --bin send_from_vault \
 //!     <path/to/treasury.bin> \
+//!     <path/to/token.bin> \
 //!     <token_definition_account_id> \
 //!     <recipient_account_id> \
 //!     <amount>
@@ -26,25 +27,30 @@ async fn main() {
     // Parse arguments
     let treasury_bin_path = std::env::args_os()
         .nth(1)
-        .expect("Usage: send_from_vault <treasury.bin> <token_def_id> <recipient_id> <amount>")
+        .expect("Usage: send_from_vault <treasury.bin> <token.bin> <token_def_id> <recipient_id> <amount>")
+        .into_string()
+        .unwrap();
+    let token_bin_path = std::env::args_os()
+        .nth(2)
+        .expect("Missing <token.bin> path")
         .into_string()
         .unwrap();
     let token_def_id: AccountId = std::env::args_os()
-        .nth(2)
+        .nth(3)
         .expect("Missing <token_definition_account_id>")
         .into_string()
         .unwrap()
         .parse()
         .unwrap();
     let recipient_id: AccountId = std::env::args_os()
-        .nth(3)
+        .nth(4)
         .expect("Missing <recipient_account_id>")
         .into_string()
         .unwrap()
         .parse()
         .unwrap();
     let amount: u128 = std::env::args_os()
-        .nth(4)
+        .nth(5)
         .expect("Missing <amount>")
         .into_string()
         .unwrap()
@@ -56,6 +62,11 @@ async fn main() {
     let treasury_program = Program::new(treasury_bytecode).unwrap();
     let treasury_program_id = treasury_program.id();
 
+    // Load token program to get its ID
+    let token_bytecode: Vec<u8> = std::fs::read(&token_bin_path).unwrap();
+    let token_program = Program::new(token_bytecode).unwrap();
+    let token_program_id = token_program.id();
+
     // Compute PDA account IDs automatically
     let treasury_state_id = compute_treasury_state_pda(&treasury_program_id);
     let vault_holding_id = compute_vault_holding_pda(&treasury_program_id, &token_def_id);
@@ -66,7 +77,10 @@ async fn main() {
     println!("Amount:                 {}", amount);
 
     // Build the Send instruction
-    let instruction = Instruction::Send { amount };
+    let instruction = Instruction::Send {
+        amount,
+        token_program_id,
+    };
 
     // Serialize instruction
     let instruction_data = Program::serialize_instruction(&instruction).unwrap();

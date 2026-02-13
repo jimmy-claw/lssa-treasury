@@ -7,8 +7,7 @@ pub mod deposit;
 pub use treasury_core::Instruction;
 
 use nssa_core::account::AccountWithMetadata;
-use nssa_core::program::{AccountPostState, ProgramOutput};
-use treasury_core::TreasuryState;
+use nssa_core::program::ProgramOutput;
 
 /// Dispatch incoming instructions to their handlers.
 pub fn process(
@@ -19,8 +18,9 @@ pub fn process(
         Instruction::CreateVault {
             token_name,
             initial_supply,
-        } => create_vault::handle(accounts, token_name, *initial_supply),
-        Instruction::Send { amount } => send::handle(accounts, *amount),
-        Instruction::Deposit { amount } => deposit::handle(accounts, *amount),
+            token_program_id,
+        } => create_vault::handle(accounts, token_name, *initial_supply, token_program_id),
+        Instruction::Send { amount, token_program_id } => send::handle(accounts, *amount, token_program_id),
+        Instruction::Deposit { amount, token_program_id } => deposit::handle(accounts, *amount, token_program_id),
     }
 }

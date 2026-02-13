@@ -1,8 +1,7 @@
 //! Handler for Send — transfers tokens from treasury vault to a recipient.
 
 use nssa_core::account::AccountWithMetadata;
-use nssa_core::program::{AccountPostState, ChainedCall, InstructionData, ProgramOutput};
-use nssa::program::Program;
+use nssa_core::program::{AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramOutput};
 
 /// Token transfer instruction: [0x01 || amount (16 bytes LE)]
 fn build_transfer_instruction(amount: u128) -> InstructionData {
@@ -20,7 +19,7 @@ fn build_transfer_instruction(amount: u128) -> InstructionData {
         .collect()
 }
 
-pub fn handle(accounts: &mut [AccountWithMetadata], amount: u128) -> ProgramOutput {
+pub fn handle(accounts: &mut [AccountWithMetadata], amount: u128, token_program_id: &ProgramId) -> ProgramOutput {
     if accounts.len() != 3 {
         return ProgramOutput {
             instruction_data: vec![],
@@ -38,7 +37,6 @@ pub fn handle(accounts: &mut [AccountWithMetadata], amount: u128) -> ProgramOutp
     let recipient_id = accounts[2].account_id;
 
     // Build chained call to Token program
-    let token_program_id = Program::token().id();
     let instruction_data = build_transfer_instruction(amount);
     
     // Provide vault and recipient as pre_states
@@ -46,7 +44,7 @@ pub fn handle(accounts: &mut [AccountWithMetadata], amount: u128) -> ProgramOutp
     let recipient_meta = AccountWithMetadata::new(recipient_data.clone(), false, recipient_id);
     
     let chained_call = ChainedCall {
-        program_id: token_program_id,
+        program_id: *token_program_id,
         instruction_data,
         pre_states: vec![vault_meta, recipient_meta],
         pda_seeds: vec![],

@@ -3,6 +3,7 @@
 //! Usage:
 //!   cargo run --bin deploy_and_create_vault \
 //!     <path/to/treasury.bin> \
+//!     <path/to/token.bin> \
 //!     <token_definition_account_id>
 //!
 //! The treasury_state and vault_holding PDA account IDs are computed
@@ -24,11 +25,16 @@ async fn main() {
     // Parse arguments
     let treasury_bin_path = std::env::args_os()
         .nth(1)
-        .expect("Usage: deploy_and_create_vault <treasury.bin> <token_def_account_id>")
+        .expect("Usage: deploy_and_create_vault <treasury.bin> <token.bin> <token_def_account_id>")
+        .into_string()
+        .unwrap();
+    let token_bin_path = std::env::args_os()
+        .nth(2)
+        .expect("Missing <token.bin> path")
         .into_string()
         .unwrap();
     let token_def_id: AccountId = std::env::args_os()
-        .nth(2)
+        .nth(3)
         .expect("Missing <token_definition_account_id>")
         .into_string()
         .unwrap()
@@ -40,11 +46,17 @@ async fn main() {
     let treasury_program = Program::new(treasury_bytecode).unwrap();
     let treasury_program_id = treasury_program.id();
 
+    // Load token program to get its ID
+    let token_bytecode: Vec<u8> = std::fs::read(&token_bin_path).unwrap();
+    let token_program = Program::new(token_bytecode).unwrap();
+    let token_program_id = token_program.id();
+
     // Compute PDA account IDs automatically
     let treasury_state_id = compute_treasury_state_pda(&treasury_program_id);
     let vault_holding_id = compute_vault_holding_pda(&treasury_program_id, &token_def_id);
 
     println!("Treasury program ID:    {:?}", treasury_program_id);
+    println!("Token program ID:       {:?}", token_program_id);
     println!("Treasury state PDA:     {}", treasury_state_id);
     println!("Token definition:       {}", token_def_id);
     println!("Vault holding PDA:      {}", vault_holding_id);
@@ -53,6 +65,7 @@ async fn main() {
     let instruction = Instruction::CreateVault {
         token_name: "TreasuryToken".to_string(),
         initial_supply: 1_000_000,
+        token_program_id,
     };
 
     // Serialize instruction using nssa's serialize_instruction

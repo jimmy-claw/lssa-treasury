@@ -5201,7 +5201,6 @@ name = "treasury_program"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "nssa",
  "nssa_core",
  "serde",
  "treasury_core",
