@@ -68,15 +68,16 @@ async fn main() {
         token_program_id,
     };
 
-    // Serialize instruction to bytes, then convert to u32 words
-    let instruction_bytes = borsh::to_vec(&instruction).unwrap();
+    // Serialize instruction to bytes, then convert to u32 words (padded to 4 bytes)
+    use std::convert::TryInto;
+    let mut instruction_bytes = borsh::to_vec(&instruction).unwrap();
+    // Pad to multiple of 4
+    while instruction_bytes.len() % 4 != 0 {
+        instruction_bytes.push(0);
+    }
     let instruction_data: Vec<u32> = instruction_bytes
-        .chunks(4)
-        .map(|chunk| {
-            let mut word = [0u8; 4];
-            word.copy_from_slice(chunk);
-            u32::from_le_bytes(word)
-        })
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
 
     // Build and submit the transaction
