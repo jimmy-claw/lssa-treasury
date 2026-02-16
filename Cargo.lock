@@ -5202,10 +5202,13 @@ name = "treasury-examples"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "clap",
  "nssa",
+ "nssa-framework-core",
  "nssa_core",
  "risc0-zkvm",
  "serde",
+ "serde_json",
  "tokio",
  "treasury_core",
  "wallet",

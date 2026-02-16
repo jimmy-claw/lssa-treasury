@@ -1,0 +1,216 @@
+{
+  "version": "0.1.0",
+  "name": "treasury_program",
+  "instructions": [
+    {
+      "name": "create_vault",
+      "accounts": [
+        {
+          "name": "treasury_state_acct",
+          "writable": true,
+          "signer": false,
+          "init": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "treasury_state"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "vault_holding",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "token_definition"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "token_name",
+          "type": {
+            "array": [
+              "u8",
+              6
+            ]
+          }
+        },
+        {
+          "name": "initial_supply",
+          "type": "u128"
+        },
+        {
+          "name": "token_program_id",
+          "type": "program_id"
+        },
+        {
+          "name": "authorized_accounts",
+          "type": {
+            "vec": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "send",
+      "accounts": [
+        {
+          "name": "treasury_state_acct",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "treasury_state"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault_holding",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "token_definition"
+              }
+            ]
+          }
+        },
+        {
+          "name": "recipient",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "signer",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u128"
+        },
+        {
+          "name": "token_program_id",
+          "type": "program_id"
+        }
+      ]
+    },
+    {
+      "name": "deposit",
+      "accounts": [
+        {
+          "name": "treasury_state_acct",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "treasury_state"
+              }
+            ]
+          }
+        },
+        {
+          "name": "sender_holding",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "vault_holding",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "token_definition"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u128"
+        },
+        {
+          "name": "token_program_id",
+          "type": "program_id"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "TreasuryState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault_count",
+            "type": "u64"
+          },
+          {
+            "name": "authorized_accounts",
+            "type": {
+              "vec": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "code": 6001,
+      "name": "NoAuthorizedAccounts",
+      "msg": "At least one authorized account required"
+    },
+    {
+      "code": 1008,
+      "name": "Unauthorized",
+      "msg": "Signer is not authorized"
+    }
+  ]
+}

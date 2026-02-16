@@ -169,6 +169,9 @@ fn expand_nssa_program(input: ItemMod) -> syn::Result<TokenStream2> {
         }
     };
 
+    // Generate IDL function
+    let idl_fn = generate_idl_fn(mod_name, &instructions);
+
     // Assemble everything
     let expanded = quote! {
         // The instruction enum (used by both on-chain and client)
@@ -184,6 +187,9 @@ fn expand_nssa_program(input: ItemMod) -> syn::Result<TokenStream2> {
 
             #(#validation_fns)*
         }
+
+        // IDL generation (available at host-side for tooling)
+        #idl_fn
 
         // The guest binary entry point
         #main_fn
@@ -413,4 +419,104 @@ fn to_pascal_case(ident: &Ident) -> Ident {
         })
         .collect();
     format_ident!("{}", pascal)
+}
+
+/// Convert a Rust type to an IDL type string.
+fn rust_type_to_idl_string(ty: &Type) -> String {
+    match ty {
+        Type::Path(type_path) => {
+            let segment = type_path.path.segments.last().unwrap();
+            let ident = segment.ident.to_string();
+            match ident.as_str() {
+                "u8" | "u16" | "u32" | "u64" | "u128" |
+                "i8" | "i16" | "i32" | "i64" | "i128" |
+                "bool" | "String" => ident.to_lowercase(),
+                "Vec" => {
+                    if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                        if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                            format!("vec<{}>", rust_type_to_idl_string(inner))
+                        } else {
+                            "vec<unknown>".to_string()
+                        }
+                    } else {
+                        "vec<unknown>".to_string()
+                    }
+                }
+                "ProgramId" => "program_id".to_string(),
+                other => other.to_string(),
+            }
+        }
+        Type::Array(arr) => {
+            let elem = rust_type_to_idl_string(&arr.elem);
+            // Try to extract the length
+            if let syn::Expr::Lit(lit) = &arr.len {
+                if let syn::Lit::Int(n) = &lit.lit {
+                    return format!("[{}; {}]", elem, n);
+                }
+            }
+            format!("[{}; ?]", elem)
+        }
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Generate a function that returns the program IDL.
+fn generate_idl_fn(mod_name: &Ident, instructions: &[InstructionInfo]) -> TokenStream2 {
+    let program_name = mod_name.to_string();
+
+    let instruction_literals: Vec<TokenStream2> = instructions.iter().map(|ix| {
+        let ix_name = ix.fn_name.to_string();
+
+        let account_literals: Vec<TokenStream2> = ix.accounts.iter().map(|acc| {
+            let acc_name = acc.name.to_string();
+            let writable = acc.constraints.mutable;
+            let signer = acc.constraints.signer;
+            let init = acc.constraints.init;
+            quote! {
+                nssa_framework_core::idl::IdlAccountItem {
+                    name: #acc_name.to_string(),
+                    writable: #writable,
+                    signer: #signer,
+                    init: #init,
+                    owner: None,
+                    pda: None,
+                }
+            }
+        }).collect();
+
+        let arg_literals: Vec<TokenStream2> = ix.args.iter().map(|arg| {
+            let arg_name = arg.name.to_string();
+            let type_str = rust_type_to_idl_string(&arg.ty);
+            quote! {
+                nssa_framework_core::idl::IdlArg {
+                    name: #arg_name.to_string(),
+                    type_: nssa_framework_core::idl::IdlType::Primitive(#type_str.to_string()),
+                }
+            }
+        }).collect();
+
+        quote! {
+            nssa_framework_core::idl::IdlInstruction {
+                name: #ix_name.to_string(),
+                accounts: vec![#(#account_literals),*],
+                args: vec![#(#arg_literals),*],
+            }
+        }
+    }).collect();
+
+    quote! {
+        /// Returns the IDL (Interface Definition Language) for this program.
+        /// Use this to generate CLI tools, client SDKs, or documentation.
+        #[allow(dead_code)]
+        pub fn __program_idl() -> nssa_framework_core::idl::NssaIdl {
+            nssa_framework_core::idl::NssaIdl {
+                version: "0.1.0".to_string(),
+                name: #program_name.to_string(),
+                instructions: vec![#(#instruction_literals),*],
+                accounts: vec![],
+                types: vec![],
+                errors: vec![],
+            }
+        }
+    }
 }
