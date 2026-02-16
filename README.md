@@ -137,7 +137,99 @@ cargo check
 
 # Build the zkVM guest
 cargo risczero build --manifest-path methods/guest/Cargo.toml
+
+# Build the tooling (IDL generator + CLI)
+cargo build --bin generate_idl --bin treasury_cli -p treasury-examples
 ```
+
+### Generate the IDL
+
+The `#[nssa_program]` macro captures the full program interface. Generate the IDL JSON:
+
+```bash
+cargo run --bin generate_idl > treasury-idl.json
+```
+
+This produces a JSON file describing every instruction, its accounts (with PDA info), argument types, account types, and errors. Example snippet:
+
+```json
+{
+  "name": "treasury_program",
+  "instructions": [
+    {
+      "name": "send",
+      "accounts": [
+        { "name": "treasury_state_acct", "pda": { "seeds": [{"kind": "const", "value": "treasury_state"}] } },
+        { "name": "vault_holding", "pda": { "seeds": [{"kind": "account", "path": "token_definition"}] } },
+        { "name": "recipient" },
+        { "name": "signer", "signer": true }
+      ],
+      "args": [
+        { "name": "amount", "type": "u128" },
+        { "name": "token_program_id", "type": "program_id" }
+      ]
+    }
+  ]
+}
+```
+
+### Use the IDL-Driven CLI
+
+The CLI reads any program's IDL and auto-generates subcommands — no hand-written clap structs needed:
+
+```bash
+# See all available commands (auto-generated from IDL)
+cargo run --bin treasury_cli -- --idl treasury-idl.json
+
+# Output:
+# 🔧 treasury_program v0.1.0 — IDL-driven CLI
+#
+# COMMANDS:
+#   idl                    Print IDL information
+#   create-vault         --token-name <[u8; 6]> --initial-supply <u128> ...
+#   send                 --amount <u128> --token-program-id <program_id> --recipient-account <ID> --signer-account <ID>
+#   deposit              --amount <u128> --token-program-id <program_id> --sender-holding-account <ID>
+```
+
+PDA accounts are auto-computed. Non-PDA accounts become `--*-account` flags:
+
+```bash
+# Send tokens from the treasury vault
+cargo run --bin treasury_cli -- --idl treasury-idl.json send \
+  --amount 100 \
+  --token-program-id <TOKEN_PROGRAM_ID> \
+  --recipient-account <RECIPIENT_ID> \
+  --signer-account <YOUR_KEY>
+
+# Output:
+# 📋 Instruction: send
+# Accounts:
+#   📦 treasury_state_acct → auto-computed (PDA)
+#   📦 vault_holding → auto-computed (PDA)
+#   📦 recipient → <RECIPIENT_ID>
+#   📦 signer → <YOUR_KEY>
+# 🔧 Transaction: Send { amount: 100, token_program_id: ... }
+```
+
+Get per-instruction help:
+
+```bash
+cargo run --bin treasury_cli -- --idl treasury-idl.json send --help
+
+# 📋 send — 4 account(s), 2 arg(s)
+# ACCOUNTS:
+#   treasury_state_acct (PDA — auto-computed)
+#   vault_holding (PDA — auto-computed)
+#   recipient
+#   signer [signer]
+# ARGS:
+#   --amount                    amount (u128)
+#   --token-program-id          token_program_id (program_id)
+#   --recipient-account         Account ID for 'recipient'
+#   --signer-account            Account ID for 'signer' [signer]
+```
+
+> **Note:** Transaction submission isn't wired up yet (needs a running sequencer). The CLI currently validates args and shows what it *would* build. See the [`bedrock-api` branch WORKSHOP.md](../../tree/bedrock-api/WORKSHOP.md) for running the full stack.
 
 ### Run (needs 3 terminals — see [WORKSHOP.md](../../tree/bedrock-api/WORKSHOP.md) on bedrock-api branch)
 
@@ -145,7 +237,7 @@ cargo risczero build --manifest-path methods/guest/Cargo.toml
 # Terminal 1: Logos Blockchain node
 # Terminal 2: Indexer service  
 # Terminal 3: Sequencer
-# Then deploy + interact via wallet CLI
+# Then deploy + interact via wallet CLI or treasury_cli
 ```
 
 ## What This Proves
@@ -163,10 +255,13 @@ cargo risczero build --manifest-path methods/guest/Cargo.toml
 
 ## Roadmap
 
+- [x] **`#[nssa_program]` macro** — auto-generates Instruction enum + main() from function signatures
+- [x] **IDL generation** — `__program_idl()` function + `generate_idl` binary → JSON schema
+- [x] **IDL-driven CLI** — `treasury_cli` reads IDL, auto-generates subcommands with PDA-aware args
+- [ ] **Wire up transaction submission** — connect CLI to sequencer for actual on-chain execution
 - [ ] **Account constraints** — `#[account(mut)]`, `#[account(init)]`, `#[account(signer)]` runtime validation
-- [ ] **IDL generation** — JSON schema from macro metadata → client SDK generation
-- [ ] **CLI generation** — auto-generate CLI subcommands from IDL (like Anchor)
 - [ ] **PDA derivation in macro** — `#[account(pda, seeds = [...])]` with automatic seed computation
+- [ ] **Client SDK generation** — generate TypeScript/Python clients from IDL
 
 ## References
 
