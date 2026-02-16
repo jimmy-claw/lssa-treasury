@@ -3227,6 +3227,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "nssa-framework"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "nssa-framework-core",
+ "nssa-framework-macros",
+ "nssa_core",
+]
+
+[[package]]
+name = "nssa-framework-core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "nssa_core",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "nssa-framework-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.115",
+]
+
+[[package]]
 name = "nssa_core"
 version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/lssa.git?branch=schouhy%2Ffull-bedrock-integration#6ca020d547a9ef65b07c636bfabf8ed2149d9b62"
@@ -5186,10 +5216,12 @@ name = "treasury-guest"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "nssa-framework",
+ "nssa-framework-core",
  "nssa_core",
  "risc0-zkvm",
+ "serde",
  "treasury_core",
- "treasury_program",
 ]
 
 [[package]]

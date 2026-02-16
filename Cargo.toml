@@ -6,6 +6,9 @@ members = [
     "methods",
     "methods/guest",
     "examples/program_deployment",
+    "nssa-framework",
+    "nssa-framework-core",
+    "nssa-framework-macros",
 ]
 
 [workspace.dependencies]

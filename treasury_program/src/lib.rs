@@ -1,3 +1,9 @@
+// treasury_program — handler modules (legacy, pre-framework).
+//
+// With the nssa-framework macros, these handlers are now defined
+// directly in the guest binary using #[nssa_program].
+// This crate is kept for reference and test compatibility.
+
 pub mod create_vault;
 pub mod deposit;
 pub mod send;
@@ -6,7 +12,7 @@ use nssa_core::account::AccountWithMetadata;
 use nssa_core::program::{AccountPostState, ChainedCall};
 use treasury_core::Instruction;
 
-/// Main entry point called from the guest binary.
+/// Main entry point (legacy pattern — replaced by #[nssa_program] macro).
 pub fn process(
     accounts: &[AccountWithMetadata],
     instruction: &Instruction,
