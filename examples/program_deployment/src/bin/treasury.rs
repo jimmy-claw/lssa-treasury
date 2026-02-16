@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
 use nssa::{
     AccountId, PublicTransaction,
     program::Program,
@@ -97,6 +98,13 @@ enum Commands {
 
     /// Show multisig/vault status
     Status,
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 fn load_program(path: &str) -> (Program, nssa::ProgramId) {
@@ -139,6 +147,13 @@ async fn submit_and_confirm(
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+
+    // Handle completions early (no wallet/program needed)
+    if let Commands::Completions { shell } = &cli.command {
+        generate(*shell, &mut Cli::command(), "treasury", &mut std::io::stdout());
+        return;
+    }
+
     let wallet_core = WalletCore::from_env().unwrap();
     let (_, program_id) = load_program(&cli.program);
 
@@ -340,6 +355,8 @@ async fn main() {
             let tx = PublicTransaction::new(message, witness_set);
             submit_and_confirm(&wallet_core, tx, "Set threshold").await;
         }
+
+        Commands::Completions { .. } => unreachable!(), // handled above
 
         Commands::Status => {
             let multisig_state_id = compute_multisig_state_pda(&program_id);
