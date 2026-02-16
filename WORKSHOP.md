@@ -40,17 +40,47 @@ rustup show  # Should show nightly
 cargo risczero --version
 ```
 
-### Start the sequencer
+### Start the local environment
 
-In a separate terminal:
+> ⚠️ **Bedrock integration is in progress.** The old single-command sequencer setup doesn't work right now. You need to run three services. This will be simplified once the bedrock integration PR lands.
+
+You'll need **three terminals** and two repos:
+- `logos-blockchain/logos-blockchain` — the base layer node
+- `logos-blockchain/lssa` — the sequencer + indexer
+
+**Terminal 1 — Logos Blockchain node:**
 
 ```bash
-git clone https://github.com/logos-blockchain/lssa.git
-cd lssa/sequencer_runner
-RUST_LOG=info cargo run $(pwd)/configs/debug
+cd logos-blockchain
+git checkout master && git pull
+cargo clean
+rm -rf ~/.logos-blockchain-circuits
+./scripts/setup-logos-blockchain-circuits.sh
+cargo build --all-features
+./target/debug/logos-blockchain-node nodes/node/config-one-node.yaml
 ```
 
-> **Note:** First build takes a while. Grab a coffee ☕
+**Terminal 2 — Indexer service:**
+
+```bash
+cd lssa
+git checkout schouhy/full-bedrock-integration
+RUST_LOG=info cargo run --release -p indexer_service \
+  $(pwd)/integration_tests/configs/indexer/indexer_config.json
+```
+
+**Terminal 3 — Sequencer:**
+
+```bash
+cd lssa
+git checkout schouhy/full-bedrock-integration
+RUST_LOG=info RISC0_DEV_MODE=1 cargo run --release -p sequencer_runner \
+  sequencer_runner/configs/debug
+```
+
+> **Note:** First build takes a while (especially `logos-blockchain`). Grab a coffee ☕
+> 
+> `RISC0_DEV_MODE=1` skips real proof generation — much faster for development.
 
 ### Set up your wallet
 
