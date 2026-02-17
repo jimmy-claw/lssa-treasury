@@ -105,6 +105,9 @@ async fn main() {
         Some("idl") => {
             print_idl_info(&idl);
         }
+        Some("inspect") => {
+            inspect_binary(&remaining_args[2..]);
+        }
         Some(cmd) => {
             // Find matching instruction
             let instruction = idl.instructions.iter().find(|ix| {
@@ -150,6 +153,7 @@ fn print_help(idl: &NssaIdl) {
     println!("  --token-bin <FILE>         Token program binary (for submission)");
     println!();
     println!("COMMANDS:");
+    println!("  inspect <FILE> [FILE...]   Print ProgramId for ELF binary(ies)");
     println!("  idl                        Print IDL information");
 
     for ix in &idl.instructions {
@@ -177,6 +181,40 @@ fn print_help(idl: &NssaIdl) {
     println!("  Vec<[u8; 32]>         Comma-separated hex strings: \"aabb...00,ccdd...00\"");
     println!();
     println!("Auto-generated from IDL. Accounts marked as PDA are computed automatically.");
+}
+
+fn inspect_binary(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("Usage: treasury_cli inspect <FILE> [FILE...]");
+        eprintln!("  Prints the ProgramId ([u32; 8]) for each ELF binary.");
+        process::exit(1);
+    }
+    for path in args {
+        let bytes = match fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("❌ {}: {}", path, e);
+                continue;
+            }
+        };
+        match Program::new(bytes) {
+            Ok(program) => {
+                let id = program.id();
+                let id_strs: Vec<String> = id.iter().map(|w| w.to_string()).collect();
+                let id_hex: Vec<String> = id.iter().map(|w| format!("{:08x}", w)).collect();
+                println!("📦 {}", path);
+                println!("   ProgramId (decimal): {}", id_strs.join(","));
+                println!("   ProgramId (hex):     {}", id_hex.join(","));
+                // Also show as AccountId-style 32-byte hex
+                let id_bytes: Vec<u8> = id.iter().flat_map(|w| w.to_le_bytes()).collect();
+                println!("   ImageID (hex bytes): {}", hex_encode(&id_bytes));
+                println!();
+            }
+            Err(e) => {
+                eprintln!("❌ {}: failed to load as program: {:?}", path, e);
+            }
+        }
+    }
 }
 
 fn print_idl_info(idl: &NssaIdl) {
