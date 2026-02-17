@@ -2,6 +2,7 @@
 ///
 /// Reads a program IDL (JSON) and generates CLI subcommands automatically.
 /// Parses all types properly based on the IDL type information.
+/// Supports risc0-compatible serialization and transaction submission.
 ///
 /// Usage:
 ///   cargo run --bin generate_idl > treasury-idl.json
@@ -10,16 +11,33 @@
 ///     --token-program-id "0,0,0,0,0,0,0,0" \
 ///     --authorized-accounts "aabb...(64 hex chars),...(another 64 hex chars)" \
 ///     --token-definition-account "some-account-id"
+///
+///   # Submit a transaction:
+///   cargo run --bin treasury_cli -- --idl treasury-idl.json --submit \
+///     --treasury-bin artifacts/treasury.bin --token-bin artifacts/token.bin \
+///     create-vault --token-name "MYTKN0" --initial-supply 1000000 \
+///     --token-program-id "0,0,0,0,0,0,0,0" \
+///     --authorized-accounts "aabb...00,ccdd...00" \
+///     --token-definition-account "deadbeef...00"
 
-use nssa_framework_core::idl::{IdlType, NssaIdl};
+use nssa::program::Program;
+use nssa::public_transaction::{Message, WitnessSet};
+use nssa::{AccountId, PublicTransaction};
+use nssa_core::program::{PdaSeed, ProgramId};
+use nssa_framework_core::idl::{IdlSeed, IdlType, NssaIdl};
 use std::{collections::HashMap, env, fs, process};
+use wallet::WalletCore;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // Find --idl flag
+    // Find global flags
     let mut idl_path = "treasury-idl.json".to_string();
     let mut program_path = "artifacts/treasury.bin".to_string();
+    let mut submit = false;
+    let mut treasury_bin: Option<String> = None;
+    let mut token_bin: Option<String> = None;
     let mut remaining_args: Vec<String> = vec![args[0].clone()];
     let mut i = 1;
     while i < args.len() {
@@ -34,6 +52,21 @@ fn main() {
                 i += 1;
                 if i < args.len() {
                     program_path = args[i].clone();
+                }
+            }
+            "--submit" => {
+                submit = true;
+            }
+            "--treasury-bin" => {
+                i += 1;
+                if i < args.len() {
+                    treasury_bin = Some(args[i].clone());
+                }
+            }
+            "--token-bin" => {
+                i += 1;
+                if i < args.len() {
+                    token_bin = Some(args[i].clone());
                 }
             }
             _ => remaining_args.push(args[i].clone()),
@@ -74,7 +107,16 @@ fn main() {
             match instruction {
                 Some(ix) => {
                     let cli_args = parse_instruction_args(&remaining_args[2..], ix);
-                    execute_instruction(&idl, ix, &cli_args, &program_path);
+                    execute_instruction(
+                        &idl,
+                        ix,
+                        &cli_args,
+                        &program_path,
+                        submit,
+                        treasury_bin.as_deref(),
+                        token_bin.as_deref(),
+                    )
+                    .await;
                 }
                 None => {
                     eprintln!("Unknown command: {}", cmd);
@@ -94,20 +136,28 @@ fn print_help(idl: &NssaIdl) {
     println!("  treasury_cli [OPTIONS] <COMMAND> [ARGS]");
     println!();
     println!("OPTIONS:");
-    println!("  -i, --idl <FILE>       IDL JSON file [default: treasury-idl.json]");
-    println!("  -p, --program <FILE>   Program binary [default: artifacts/treasury.bin]");
+    println!("  -i, --idl <FILE>           IDL JSON file [default: treasury-idl.json]");
+    println!("  -p, --program <FILE>       Program binary [default: artifacts/treasury.bin]");
+    println!("  --submit                   Actually submit the transaction");
+    println!("  --treasury-bin <FILE>      Treasury program binary (for --submit)");
+    println!("  --token-bin <FILE>         Token program binary (for --submit)");
     println!();
     println!("COMMANDS:");
-    println!("  idl                    Print IDL information");
+    println!("  idl                        Print IDL information");
 
     for ix in &idl.instructions {
         let cmd = snake_to_kebab(&ix.name);
-        let args_desc: Vec<String> = ix.args.iter().map(|a| {
-            format!("--{} <{}>", snake_to_kebab(&a.name), idl_type_hint(&a.type_))
-        }).collect();
-        let acct_desc: Vec<String> = ix.accounts.iter().filter(|a| a.pda.is_none()).map(|a| {
-            format!("--{}-account <HEX>", snake_to_kebab(&a.name))
-        }).collect();
+        let args_desc: Vec<String> = ix
+            .args
+            .iter()
+            .map(|a| format!("--{} <{}>", snake_to_kebab(&a.name), idl_type_hint(&a.type_)))
+            .collect();
+        let acct_desc: Vec<String> = ix
+            .accounts
+            .iter()
+            .filter(|a| a.pda.is_none())
+            .map(|a| format!("--{}-account <HEX>", snake_to_kebab(&a.name)))
+            .collect();
 
         let all_args: Vec<String> = args_desc.into_iter().chain(acct_desc).collect();
         println!("  {:<20} {}", cmd, all_args.join(" "));
@@ -126,7 +176,10 @@ fn print_idl_info(idl: &NssaIdl) {
     println!("{}", serde_json::to_string_pretty(idl).unwrap());
 }
 
-fn parse_instruction_args(args: &[String], ix: &nssa_framework_core::idl::IdlInstruction) -> HashMap<String, String> {
+fn parse_instruction_args(
+    args: &[String],
+    ix: &nssa_framework_core::idl::IdlInstruction,
+) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let mut i = 0;
     while i < args.len() {
@@ -146,29 +199,55 @@ fn parse_instruction_args(args: &[String], ix: &nssa_framework_core::idl::IdlIns
 
     // Check for --help
     if map.contains_key("help") || map.contains_key("h") {
-        println!("📋 {} — {} account(s), {} arg(s)", ix.name, ix.accounts.len(), ix.args.len());
+        println!(
+            "📋 {} — {} account(s), {} arg(s)",
+            ix.name,
+            ix.accounts.len(),
+            ix.args.len()
+        );
         println!();
         println!("ACCOUNTS:");
         for acc in &ix.accounts {
             let mut flags = vec![];
-            if acc.writable { flags.push("mut"); }
-            if acc.signer { flags.push("signer"); }
-            if acc.init { flags.push("init"); }
-            let flags_str = if flags.is_empty() { String::new() } else { format!(" [{}]", flags.join(", ")) };
-            let pda_note = if acc.pda.is_some() { " (PDA — auto-computed)" } else { "" };
+            if acc.writable {
+                flags.push("mut");
+            }
+            if acc.signer {
+                flags.push("signer");
+            }
+            if acc.init {
+                flags.push("init");
+            }
+            let flags_str = if flags.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", flags.join(", "))
+            };
+            let pda_note = if acc.pda.is_some() {
+                " (PDA — auto-computed)"
+            } else {
+                ""
+            };
             println!("  {}{}{}", acc.name, flags_str, pda_note);
         }
         println!();
         println!("ARGS:");
         for arg in &ix.args {
-            println!("  --{:<25} {} ({}) — format: {}", 
-                snake_to_kebab(&arg.name), arg.name, 
+            println!(
+                "  --{:<25} {} ({}) — format: {}",
+                snake_to_kebab(&arg.name),
+                arg.name,
                 idl_type_display(&arg.type_),
-                idl_type_hint(&arg.type_));
+                idl_type_hint(&arg.type_)
+            );
         }
         for acc in &ix.accounts {
             if acc.pda.is_none() {
-                println!("  --{}-account    Account ID for '{}' (64 hex chars)", snake_to_kebab(&acc.name), acc.name);
+                println!(
+                    "  --{}-account    Account ID for '{}' (64 hex chars)",
+                    snake_to_kebab(&acc.name),
+                    acc.name
+                );
             }
         }
         process::exit(0);
@@ -182,25 +261,30 @@ fn parse_instruction_args(args: &[String], ix: &nssa_framework_core::idl::IdlIns
 /// Parse a CLI string value according to the IDL type, returning a structured representation.
 #[derive(Debug, Clone)]
 enum ParsedValue {
+    Bool(bool),
     U8(u8),
     U32(u32),
     U64(u64),
     U128(u128),
-    ByteArray(Vec<u8>),           // [u8; N]
-    U32Array(Vec<u32>),           // [u32; N] / ProgramId
-    ByteArrayVec(Vec<Vec<u8>>),   // Vec<[u8; 32]>
-    Raw(String),                  // fallback
+    Str(String),
+    ByteArray(Vec<u8>),         // [u8; N]
+    U32Array(Vec<u32>),         // [u32; N] / ProgramId
+    ByteArrayVec(Vec<Vec<u8>>), // Vec<[u8; 32]>
+    None,                       // Option::None
+    Some(Box<ParsedValue>),     // Option::Some
+    Raw(String),                // fallback
 }
 
 impl std::fmt::Display for ParsedValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ParsedValue::Bool(v) => write!(f, "{}", v),
             ParsedValue::U8(v) => write!(f, "{}", v),
             ParsedValue::U32(v) => write!(f, "{}", v),
             ParsedValue::U64(v) => write!(f, "{}", v),
             ParsedValue::U128(v) => write!(f, "{}", v),
+            ParsedValue::Str(s) => write!(f, "\"{}\"", s),
             ParsedValue::ByteArray(bytes) => {
-                // Try to display as UTF-8 if all printable, otherwise hex
                 if let Ok(s) = std::str::from_utf8(bytes) {
                     if s.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
                         let trimmed = s.trim_end_matches('\0');
@@ -217,6 +301,8 @@ impl std::fmt::Display for ParsedValue {
                 let strs: Vec<String> = vecs.iter().map(|v| format!("0x{}", hex_encode(v))).collect();
                 write!(f, "[{}]", strs.join(", "))
             }
+            ParsedValue::None => write!(f, "None"),
+            ParsedValue::Some(inner) => write!(f, "Some({})", inner),
             ParsedValue::Raw(s) => write!(f, "{}", s),
         }
     }
@@ -229,49 +315,52 @@ fn parse_value(raw: &str, ty: &IdlType) -> Result<ParsedValue, String> {
         IdlType::Vec { vec } => parse_vec(raw, vec),
         IdlType::Option { option } => {
             if raw == "none" || raw == "null" || raw.is_empty() {
-                Ok(ParsedValue::Raw("None".to_string()))
+                Ok(ParsedValue::None)
             } else {
-                parse_value(raw, option)
+                Ok(ParsedValue::Some(Box::new(parse_value(raw, option)?)))
             }
         }
-        IdlType::Defined { defined } => {
-            Ok(ParsedValue::Raw(format!("{}({})", defined, raw)))
-        }
+        IdlType::Defined { defined } => Ok(ParsedValue::Raw(format!("{}({})", defined, raw))),
     }
 }
 
 fn parse_primitive(raw: &str, prim: &str) -> Result<ParsedValue, String> {
     match prim {
-        "u8" => raw.parse::<u8>().map(ParsedValue::U8)
+        "u8" => raw
+            .parse::<u8>()
+            .map(ParsedValue::U8)
             .map_err(|e| format!("Invalid u8 '{}': {}", raw, e)),
-        "u32" => raw.parse::<u32>().map(ParsedValue::U32)
+        "u32" => raw
+            .parse::<u32>()
+            .map(ParsedValue::U32)
             .map_err(|e| format!("Invalid u32 '{}': {}", raw, e)),
-        "u64" => raw.parse::<u64>().map(ParsedValue::U64)
+        "u64" => raw
+            .parse::<u64>()
+            .map(ParsedValue::U64)
             .map_err(|e| format!("Invalid u64 '{}': {}", raw, e)),
-        "u128" => raw.parse::<u128>().map(ParsedValue::U128)
+        "u128" => raw
+            .parse::<u128>()
+            .map(ParsedValue::U128)
             .map_err(|e| format!("Invalid u128 '{}': {}", raw, e)),
-        "program_id" => {
-            // ProgramId = [u32; 8], accept comma-separated u32 values
-            parse_program_id(raw)
-        }
-        "bool" => {
-            match raw {
-                "true" | "1" | "yes" => Ok(ParsedValue::Raw("true".to_string())),
-                "false" | "0" | "no" => Ok(ParsedValue::Raw("false".to_string())),
-                _ => Err(format!("Invalid bool '{}': expected true/false", raw)),
-            }
-        }
-        "string" | "String" => Ok(ParsedValue::Raw(raw.to_string())),
+        "program_id" => parse_program_id(raw),
+        "bool" => match raw {
+            "true" | "1" | "yes" => Ok(ParsedValue::Bool(true)),
+            "false" | "0" | "no" => Ok(ParsedValue::Bool(false)),
+            _ => Err(format!("Invalid bool '{}': expected true/false", raw)),
+        },
+        "string" | "String" => Ok(ParsedValue::Str(raw.to_string())),
         other => Ok(ParsedValue::Raw(format!("{}({})", other, raw))),
     }
 }
 
 fn parse_program_id(raw: &str) -> Result<ParsedValue, String> {
-    // Accept: "0,0,0,0,0,0,0,0" or hex "0000000000000000" (32 hex = 8*4 bytes)
     if raw.contains(',') {
         let parts: Vec<&str> = raw.split(',').map(|s| s.trim()).collect();
         if parts.len() != 8 {
-            return Err(format!("ProgramId needs 8 u32 values, got {}", parts.len()));
+            return Err(format!(
+                "ProgramId needs 8 u32 values, got {}",
+                parts.len()
+            ));
         }
         let mut vals = Vec::with_capacity(8);
         for (i, p) in parts.iter().enumerate() {
@@ -284,7 +373,6 @@ fn parse_program_id(raw: &str) -> Result<ParsedValue, String> {
         }
         Ok(ParsedValue::U32Array(vals))
     } else if raw.len() == 64 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
-        // 64 hex chars = 32 bytes = 8 u32s (little-endian)
         let bytes = hex_decode(raw)?;
         let mut vals = Vec::with_capacity(8);
         for chunk in bytes.chunks(4) {
@@ -302,9 +390,7 @@ fn parse_program_id(raw: &str) -> Result<ParsedValue, String> {
 fn parse_array(raw: &str, elem_type: &IdlType, size: usize) -> Result<ParsedValue, String> {
     match elem_type {
         IdlType::Primitive(p) if p == "u8" => {
-            // [u8; N]: accept hex string or UTF-8 string
             if raw.len() == size * 2 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
-                // Hex input
                 let bytes = hex_decode(raw)?;
                 if bytes.len() != size {
                     return Err(format!("Expected {} bytes, got {}", size, bytes.len()));
@@ -314,16 +400,22 @@ fn parse_array(raw: &str, elem_type: &IdlType, size: usize) -> Result<ParsedValu
                 let hex = &raw[2..];
                 let bytes = hex_decode(hex)?;
                 if bytes.len() != size {
-                    return Err(format!("Expected {} bytes from hex, got {}", size, bytes.len()));
+                    return Err(format!(
+                        "Expected {} bytes from hex, got {}",
+                        size,
+                        bytes.len()
+                    ));
                 }
                 Ok(ParsedValue::ByteArray(bytes))
             } else {
-                // UTF-8 string, right-pad with zeros
                 let str_bytes = raw.as_bytes();
                 if str_bytes.len() > size {
                     return Err(format!(
                         "String '{}' is {} bytes, max {} for [u8; {}]",
-                        raw, str_bytes.len(), size, size
+                        raw,
+                        str_bytes.len(),
+                        size,
+                        size
                     ));
                 }
                 let mut bytes = vec![0u8; size];
@@ -332,14 +424,16 @@ fn parse_array(raw: &str, elem_type: &IdlType, size: usize) -> Result<ParsedValu
             }
         }
         IdlType::Primitive(p) if p == "u32" => {
-            // [u32; N]: comma-separated
             let parts: Vec<&str> = raw.split(',').map(|s| s.trim()).collect();
             if parts.len() != size {
                 return Err(format!("Expected {} u32 values, got {}", size, parts.len()));
             }
             let mut vals = Vec::with_capacity(size);
             for p in &parts {
-                vals.push(p.parse::<u32>().map_err(|e| format!("Invalid u32 '{}': {}", p, e))?);
+                vals.push(
+                    p.parse::<u32>()
+                        .map_err(|e| format!("Invalid u32 '{}': {}", p, e))?,
+                );
             }
             Ok(ParsedValue::U32Array(vals))
         }
@@ -349,32 +443,37 @@ fn parse_array(raw: &str, elem_type: &IdlType, size: usize) -> Result<ParsedValu
 
 fn parse_vec(raw: &str, elem_type: &IdlType) -> Result<ParsedValue, String> {
     match elem_type {
-        IdlType::Array { array } => {
-            match &*array.0 {
-                IdlType::Primitive(p) if p == "u8" => {
-                    // Vec<[u8; N]>: comma-separated hex strings
-                    let size = array.1;
-                    if raw.is_empty() {
-                        return Ok(ParsedValue::ByteArrayVec(vec![]));
-                    }
-                    let parts: Vec<&str> = raw.split(',').map(|s| s.trim()).collect();
-                    let mut result = Vec::with_capacity(parts.len());
-                    for (i, part) in parts.iter().enumerate() {
-                        let hex = part.strip_prefix("0x").or_else(|| part.strip_prefix("0X")).unwrap_or(part);
-                        let bytes = hex_decode(hex).map_err(|e| format!("Element [{}]: {}", i, e))?;
-                        if bytes.len() != size {
-                            return Err(format!(
-                                "Element [{}]: expected {} bytes ({}  hex chars), got {} bytes from '{}'",
-                                i, size, size * 2, bytes.len(), part
-                            ));
-                        }
-                        result.push(bytes);
-                    }
-                    Ok(ParsedValue::ByteArrayVec(result))
+        IdlType::Array { array } => match &*array.0 {
+            IdlType::Primitive(p) if p == "u8" => {
+                let size = array.1;
+                if raw.is_empty() {
+                    return Ok(ParsedValue::ByteArrayVec(vec![]));
                 }
-                _ => Ok(ParsedValue::Raw(raw.to_string())),
+                let parts: Vec<&str> = raw.split(',').map(|s| s.trim()).collect();
+                let mut result = Vec::with_capacity(parts.len());
+                for (i, part) in parts.iter().enumerate() {
+                    let hex = part
+                        .strip_prefix("0x")
+                        .or_else(|| part.strip_prefix("0X"))
+                        .unwrap_or(part);
+                    let bytes =
+                        hex_decode(hex).map_err(|e| format!("Element [{}]: {}", i, e))?;
+                    if bytes.len() != size {
+                        return Err(format!(
+                            "Element [{}]: expected {} bytes ({} hex chars), got {} bytes from '{}'",
+                            i,
+                            size,
+                            size * 2,
+                            bytes.len(),
+                            part
+                        ));
+                    }
+                    result.push(bytes);
+                }
+                Ok(ParsedValue::ByteArrayVec(result))
             }
-        }
+            _ => Ok(ParsedValue::Raw(raw.to_string())),
+        },
         _ => Ok(ParsedValue::Raw(raw.to_string())),
     }
 }
@@ -398,38 +497,216 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-// ─── Serialization ───────────────────────────────────────────────
+// ─── risc0 Serialization ────────────────────────────────────────
 
-/// Serialize a parsed value to its binary (borsh-like) representation.
-fn serialize_value(val: &ParsedValue) -> Vec<u8> {
-    match val {
-        ParsedValue::U8(v) => vec![*v],
-        ParsedValue::U32(v) => v.to_le_bytes().to_vec(),
-        ParsedValue::U64(v) => v.to_le_bytes().to_vec(),
-        ParsedValue::U128(v) => v.to_le_bytes().to_vec(),
-        ParsedValue::ByteArray(bytes) => bytes.clone(),
-        ParsedValue::U32Array(vals) => {
-            vals.iter().flat_map(|v| v.to_le_bytes()).collect()
-        }
-        ParsedValue::ByteArrayVec(vecs) => {
-            // Borsh Vec: 4-byte LE length prefix + concatenated elements
-            let mut out = (vecs.len() as u32).to_le_bytes().to_vec();
-            for v in vecs {
-                out.extend_from_slice(v);
-            }
-            out
-        }
-        ParsedValue::Raw(_) => vec![], // can't serialize unknown
+/// Serialize an instruction to risc0 serde format (Vec<u32>).
+///
+/// Matches the output of `risc0_zkvm::serde::to_vec` for an enum struct variant:
+///   variant_index (u32), then each field serialized in order.
+fn serialize_to_risc0(
+    variant_index: u32,
+    parsed_args: &[(&IdlType, &ParsedValue)],
+) -> Vec<u32> {
+    let mut out = vec![variant_index];
+    for (ty, val) in parsed_args {
+        serialize_value_risc0(&mut out, ty, val);
     }
+    out
+}
+
+fn serialize_value_risc0(out: &mut Vec<u32>, ty: &IdlType, val: &ParsedValue) {
+    match (ty, val) {
+        (IdlType::Primitive(p), _) => serialize_primitive_risc0(out, p.as_str(), val),
+        (IdlType::Array { array }, _) => serialize_array_risc0(out, &array.0, array.1, val),
+        (IdlType::Vec { vec }, _) => serialize_vec_risc0(out, vec, val),
+        (IdlType::Option { option: _ }, ParsedValue::None) => {
+            // Option::None = variant 0
+            out.push(0);
+        }
+        (IdlType::Option { option }, ParsedValue::Some(inner)) => {
+            // Option::Some = variant 1, then the value
+            out.push(1);
+            serialize_value_risc0(out, option, inner);
+        }
+        (IdlType::Option { option }, _) => {
+            // Non-None value passed directly (backwards compat)
+            out.push(1);
+            serialize_value_risc0(out, option, val);
+        }
+        _ => {
+            // Defined / Raw — best effort, skip
+            eprintln!(
+                "⚠️  Cannot serialize Defined/Raw type in risc0 format: {:?}",
+                val
+            );
+        }
+    }
+}
+
+fn serialize_primitive_risc0(out: &mut Vec<u32>, prim: &str, val: &ParsedValue) {
+    match (prim, val) {
+        ("bool", ParsedValue::Bool(b)) => {
+            // bool → u8 → u32
+            out.push(if *b { 1 } else { 0 });
+        }
+        ("u8", ParsedValue::U8(v)) => {
+            out.push(*v as u32);
+        }
+        ("u32", ParsedValue::U32(v)) => {
+            out.push(*v);
+        }
+        ("u64", ParsedValue::U64(v)) => {
+            // u64 → 2 words (lo, hi)
+            out.push(*v as u32);
+            out.push((*v >> 32) as u32);
+        }
+        ("u128", ParsedValue::U128(v)) => {
+            // u128 → 16 LE bytes → write_padded_bytes → 4 u32 LE words
+            let bytes = v.to_le_bytes(); // 16 bytes
+            for chunk in bytes.chunks(4) {
+                out.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            }
+        }
+        ("program_id", ParsedValue::U32Array(vals)) => {
+            // ProgramId = [u32; 8] — serde tuple → 8 words
+            for v in vals {
+                out.push(*v);
+            }
+        }
+        ("string" | "String", ParsedValue::Str(s)) => {
+            // String → length u32, then bytes padded to u32 boundary
+            let bytes = s.as_bytes();
+            out.push(bytes.len() as u32);
+            serialize_bytes_padded(out, bytes);
+        }
+        _ => {
+            eprintln!(
+                "⚠️  Type mismatch in risc0 serialization: prim={}, val={:?}",
+                prim, val
+            );
+        }
+    }
+}
+
+fn serialize_array_risc0(out: &mut Vec<u32>, elem_type: &IdlType, _size: usize, val: &ParsedValue) {
+    match (elem_type, val) {
+        (IdlType::Primitive(p), ParsedValue::ByteArray(bytes)) if p == "u8" => {
+            // [u8; N] as serde tuple → N words, each byte as u32
+            for b in bytes {
+                out.push(*b as u32);
+            }
+        }
+        (IdlType::Primitive(p), ParsedValue::U32Array(vals)) if p == "u32" => {
+            // [u32; N] as serde tuple → N words
+            for v in vals {
+                out.push(*v);
+            }
+        }
+        _ => {
+            eprintln!("⚠️  Cannot serialize array type in risc0 format: {:?}", val);
+        }
+    }
+}
+
+fn serialize_vec_risc0(out: &mut Vec<u32>, elem_type: &IdlType, val: &ParsedValue) {
+    match (elem_type, val) {
+        (IdlType::Array { array }, ParsedValue::ByteArrayVec(vecs)) => {
+            // Vec<[u8; N]> → length, then each element as serde tuple
+            out.push(vecs.len() as u32);
+            match &*array.0 {
+                IdlType::Primitive(p) if p == "u8" => {
+                    for v in vecs {
+                        for b in v {
+                            out.push(*b as u32);
+                        }
+                    }
+                }
+                _ => {
+                    eprintln!("⚠️  Cannot serialize Vec element type in risc0 format");
+                }
+            }
+        }
+        _ => {
+            eprintln!("⚠️  Cannot serialize Vec type in risc0 format: {:?}", val);
+        }
+    }
+}
+
+/// Write bytes padded to u32 boundary (for String serialization).
+fn serialize_bytes_padded(out: &mut Vec<u32>, bytes: &[u8]) {
+    // Pack bytes into u32 words, little-endian, zero-padding the last word
+    let mut i = 0;
+    while i < bytes.len() {
+        let remaining = bytes.len() - i;
+        let mut word_bytes = [0u8; 4];
+        let take = remaining.min(4);
+        word_bytes[..take].copy_from_slice(&bytes[i..i + take]);
+        out.push(u32::from_le_bytes(word_bytes));
+        i += 4;
+    }
+}
+
+// ─── PDA computation from IDL seeds ─────────────────────────────
+
+/// Compute PDA AccountId from IDL seed definitions.
+fn compute_pda_from_seeds(
+    seeds: &[IdlSeed],
+    program_id: &ProgramId,
+    account_map: &HashMap<String, AccountId>,
+    _parsed_args: &HashMap<String, ParsedValue>,
+) -> Result<AccountId, String> {
+    // For now we support single-seed PDAs (which is what the treasury uses)
+    // Each seed produces a 32-byte value; if multiple seeds, we'd need to combine them.
+    // The treasury IDL uses single seeds per PDA.
+    if seeds.len() != 1 {
+        return Err(format!(
+            "Multi-seed PDAs not yet supported (got {} seeds)",
+            seeds.len()
+        ));
+    }
+
+    let seed_bytes: [u8; 32] = match &seeds[0] {
+        IdlSeed::Const { value } => {
+            // UTF-8 string, right-padded to 32 bytes
+            let mut bytes = [0u8; 32];
+            let src = value.as_bytes();
+            if src.len() > 32 {
+                return Err(format!("Const seed '{}' exceeds 32 bytes", value));
+            }
+            bytes[..src.len()].copy_from_slice(src);
+            bytes
+        }
+        IdlSeed::Account { path } => {
+            // Use another account's ID as the seed
+            let account_id = account_map
+                .get(path)
+                .ok_or_else(|| {
+                    format!(
+                        "PDA seed references account '{}' which hasn't been resolved yet",
+                        path
+                    )
+                })?;
+            *account_id.value()
+        }
+        IdlSeed::Arg { path } => {
+            return Err(format!("Arg-based PDA seeds not yet supported (arg: {})", path));
+        }
+    };
+
+    let pda_seed = PdaSeed::new(seed_bytes);
+    Ok(AccountId::from((program_id, &pda_seed)))
 }
 
 // ─── Execute ─────────────────────────────────────────────────────
 
-fn execute_instruction(
+async fn execute_instruction(
     _idl: &NssaIdl,
     ix: &nssa_framework_core::idl::IdlInstruction,
     args: &HashMap<String, String>,
     program_path: &str,
+    submit: bool,
+    treasury_bin: Option<&str>,
+    token_bin: Option<&str>,
 ) {
     println!("📋 Instruction: {}", ix.name);
     println!();
@@ -459,14 +736,14 @@ fn execute_instruction(
     }
 
     // Parse and validate all args
-    let mut parsed_args: Vec<(&str, ParsedValue)> = Vec::new();
+    let mut parsed_args: Vec<(&str, &IdlType, ParsedValue)> = Vec::new();
     let mut has_errors = false;
 
     for arg in &ix.args {
         let key = snake_to_kebab(&arg.name);
         let raw = args.get(&key).unwrap();
         match parse_value(raw, &arg.type_) {
-            Ok(val) => parsed_args.push((&arg.name, val)),
+            Ok(val) => parsed_args.push((&arg.name, &arg.type_, val)),
             Err(e) => {
                 eprintln!("❌ --{}: {}", key, e);
                 has_errors = true;
@@ -474,7 +751,7 @@ fn execute_instruction(
         }
     }
 
-    // Parse account IDs (expected as 64 hex chars = 32 bytes)
+    // Parse account IDs for non-PDA accounts
     let mut parsed_accounts: Vec<(&str, Vec<u8>)> = Vec::new();
     for acc in &ix.accounts {
         if acc.pda.is_some() {
@@ -482,11 +759,18 @@ fn execute_instruction(
         }
         let key = format!("{}-account", snake_to_kebab(&acc.name));
         let raw = args.get(&key).unwrap();
-        let hex = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")).unwrap_or(raw);
+        let hex = raw
+            .strip_prefix("0x")
+            .or_else(|| raw.strip_prefix("0X"))
+            .unwrap_or(raw);
         match hex_decode(hex) {
             Ok(bytes) if bytes.len() == 32 => parsed_accounts.push((&acc.name, bytes)),
             Ok(bytes) => {
-                eprintln!("❌ --{}: expected 32 bytes (64 hex chars), got {} bytes", key, bytes.len());
+                eprintln!(
+                    "❌ --{}: expected 32 bytes (64 hex chars), got {} bytes",
+                    key,
+                    bytes.len()
+                );
                 has_errors = true;
             }
             Err(e) => {
@@ -499,6 +783,19 @@ fn execute_instruction(
     if has_errors {
         process::exit(1);
     }
+
+    // Build serialized instruction data (risc0 format)
+    let ix_index = _idl
+        .instructions
+        .iter()
+        .position(|i| i.name == ix.name)
+        .unwrap_or(0);
+
+    let risc0_args: Vec<(&IdlType, &ParsedValue)> = parsed_args
+        .iter()
+        .map(|(_, ty, val)| (*ty, val))
+        .collect();
+    let instruction_data = serialize_to_risc0(ix_index as u32, &risc0_args);
 
     // Display accounts
     println!("Accounts:");
@@ -514,33 +811,189 @@ fn execute_instruction(
 
     // Display parsed args
     println!("Arguments (parsed):");
-    for (name, val) in &parsed_args {
+    for (name, _, val) in &parsed_args {
         println!("  {} = {}", name, val);
     }
     println!();
-
-    // Build serialized instruction data
-    // Format: instruction variant index (u8) + serialized args
-    let ix_index = _idl.instructions.iter().position(|i| i.name == ix.name).unwrap_or(0);
-    let mut instruction_data: Vec<u8> = vec![ix_index as u8];
-    for (_, val) in &parsed_args {
-        instruction_data.extend_from_slice(&serialize_value(val));
-    }
 
     println!("🔧 Transaction:");
     println!("  program: {}", program_path);
     println!("  instruction index: {}", ix_index);
     println!("  instruction: {} {{", to_pascal_case(&ix.name));
-    for (name, val) in &parsed_args {
+    for (name, _, val) in &parsed_args {
         println!("    {}: {},", name, val);
     }
     println!("  }}");
     println!();
-    println!("  Serialized instruction data ({} bytes):", instruction_data.len());
-    println!("    {}", hex_encode(&instruction_data));
+    println!(
+        "  Serialized instruction data ({} u32 words):",
+        instruction_data.len()
+    );
+    let hex_words: Vec<String> = instruction_data.iter().map(|w| format!("{:08x}", w)).collect();
+    println!("    [{}]", hex_words.join(", "));
     println!();
-    println!("⚠️  Transaction submission not yet wired up.");
-    println!("    But all types are parsed and serialized correctly.");
+
+    if !submit {
+        println!("⚠️  Dry run — use --submit to actually submit the transaction.");
+        return;
+    }
+
+    // ─── Transaction submission ──────────────────────────────────
+
+    let treasury_path = treasury_bin.unwrap_or(program_path);
+    let token_path = token_bin.unwrap_or_else(|| {
+        eprintln!("❌ --token-bin is required for --submit");
+        process::exit(1);
+    });
+
+    println!("📤 Submitting transaction...");
+
+    // Load program binaries to get ProgramIds
+    let treasury_bytecode = fs::read(treasury_path).unwrap_or_else(|e| {
+        eprintln!("❌ Failed to read treasury binary '{}': {}", treasury_path, e);
+        process::exit(1);
+    });
+    let treasury_program = Program::new(treasury_bytecode).unwrap_or_else(|e| {
+        eprintln!("❌ Failed to load treasury program: {:?}", e);
+        process::exit(1);
+    });
+    let treasury_program_id = treasury_program.id();
+
+    let _token_bytecode = fs::read(token_path).unwrap_or_else(|e| {
+        eprintln!("❌ Failed to read token binary '{}': {}", token_path, e);
+        process::exit(1);
+    });
+    let _token_program = Program::new(_token_bytecode).unwrap_or_else(|e| {
+        eprintln!("❌ Failed to load token program: {:?}", e);
+        process::exit(1);
+    });
+
+    println!("  Treasury program ID: {:?}", treasury_program_id);
+
+    // Build account map for PDA resolution (non-PDA accounts first)
+    let mut account_map: HashMap<String, AccountId> = HashMap::new();
+    for (name, bytes) in &parsed_accounts {
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(bytes);
+        account_map.insert(name.to_string(), AccountId::new(arr));
+    }
+
+    // Also store parsed args as ParsedValue for arg-based seeds
+    let mut parsed_arg_map: HashMap<String, ParsedValue> = HashMap::new();
+    for (name, _, val) in &parsed_args {
+        parsed_arg_map.insert(name.to_string(), val.clone());
+    }
+
+    // Resolve PDA accounts in instruction order
+    for acc in &ix.accounts {
+        if let Some(pda) = &acc.pda {
+            match compute_pda_from_seeds(
+                &pda.seeds,
+                &treasury_program_id,
+                &account_map,
+                &parsed_arg_map,
+            ) {
+                Ok(id) => {
+                    println!("  PDA {} → {}", acc.name, id);
+                    account_map.insert(acc.name.clone(), id);
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to compute PDA for '{}': {}", acc.name, e);
+                    process::exit(1);
+                }
+            }
+        }
+    }
+
+    // Build account_ids vec in instruction account order
+    let mut account_ids: Vec<AccountId> = Vec::new();
+    for acc in &ix.accounts {
+        let id = account_map.get(&acc.name).unwrap_or_else(|| {
+            eprintln!("❌ Account '{}' not resolved", acc.name);
+            process::exit(1);
+        });
+        account_ids.push(*id);
+    }
+
+    // Initialize wallet
+    let wallet_core = WalletCore::from_env().unwrap_or_else(|e| {
+        eprintln!("❌ Failed to initialize wallet: {:?}", e);
+        eprintln!("   Set NSSA_WALLET_HOME_DIR environment variable");
+        process::exit(1);
+    });
+
+    // Collect signer accounts
+    let signer_accounts: Vec<AccountId> = ix
+        .accounts
+        .iter()
+        .filter(|a| a.signer)
+        .map(|a| *account_map.get(&a.name).unwrap())
+        .collect();
+
+    // Fetch nonces and signing keys for signer accounts
+    let nonces = if signer_accounts.is_empty() {
+        vec![]
+    } else {
+        wallet_core
+            .get_accounts_nonces(signer_accounts.clone())
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("❌ Failed to fetch nonces: {:?}", e);
+                process::exit(1);
+            })
+    };
+
+    let signing_keys: Vec<_> = signer_accounts
+        .iter()
+        .map(|id| {
+            wallet_core
+                .storage()
+                .user_data
+                .get_pub_account_signing_key(id)
+                .unwrap_or_else(|| {
+                    eprintln!("❌ Signing key not found for account {}", id);
+                    eprintln!("   Was this account created with `wallet account new public`?");
+                    process::exit(1);
+                })
+        })
+        .collect();
+
+    // Build and submit transaction
+    let message = Message::new_preserialized(
+        treasury_program_id,
+        account_ids,
+        nonces,
+        instruction_data,
+    );
+    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let response = wallet_core
+        .sequencer_client
+        .send_tx_public(tx)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("❌ Failed to submit transaction: {:?}", e);
+            process::exit(1);
+        });
+
+    println!("📤 Transaction submitted!");
+    println!("   tx_hash: {}", response.tx_hash);
+    println!("   Waiting for confirmation...");
+
+    let poller = wallet::poller::TxPoller::new(
+        wallet_core.config().clone(),
+        wallet_core.sequencer_client.clone(),
+    );
+
+    match poller.poll_tx(response.tx_hash).await {
+        Ok(_) => println!("✅ Transaction confirmed — included in a block."),
+        Err(e) => {
+            eprintln!("❌ Transaction NOT confirmed: {e:#}");
+            eprintln!("   It may have failed execution. Check sequencer logs for details.");
+            process::exit(1);
+        }
+    }
 }
 
 // ─── Display helpers ─────────────────────────────────────────────
@@ -569,7 +1022,7 @@ fn idl_type_hint(ty: &IdlType) -> String {
                     format!("HEX{},...", array.1 * 2)
                 }
                 _ => "LIST".to_string(),
-            }
+            },
             _ => "LIST".to_string(),
         },
         IdlType::Option { option } => format!("OPT<{}>", idl_type_hint(option)),
