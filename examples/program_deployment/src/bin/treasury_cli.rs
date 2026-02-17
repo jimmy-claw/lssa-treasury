@@ -793,6 +793,26 @@ async fn execute_instruction(
     println!("📋 Instruction: {}", ix.name);
     println!();
 
+    // Auto-fill token-program-id from --token-bin if not provided
+    let mut args = args.clone();
+    if !args.contains_key("token-program-id") {
+        if let Some(token_path) = token_bin {
+            match fs::read(token_path) {
+                Ok(bytes) => match Program::new(bytes) {
+                    Ok(program) => {
+                        let id = program.id();
+                        let id_str: Vec<String> = id.iter().map(|w| w.to_string()).collect();
+                        let val = id_str.join(",");
+                        println!("  ℹ️  Auto-filled --token-program-id from {}", token_path);
+                        args.insert("token-program-id".to_string(), val);
+                    }
+                    Err(e) => eprintln!("⚠️  Could not load token binary for auto-fill: {:?}", e),
+                },
+                Err(e) => eprintln!("⚠️  Could not read token binary for auto-fill: {}", e),
+            }
+        }
+    }
+
     // Validate all required args are present
     let mut missing = vec![];
     for arg in &ix.args {
