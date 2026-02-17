@@ -968,6 +968,43 @@ async fn execute_instruction(
         account_map.insert(name.to_string(), AccountId::new(arr));
     }
 
+    // Check if any PDA seeds reference accounts not in this instruction.
+    // If so, they must be provided via --<name>-account CLI args.
+    for acc in &ix.accounts {
+        if let Some(pda) = &acc.pda {
+            for seed in &pda.seeds {
+                if let IdlSeed::Account { path } = seed {
+                    if !account_map.contains_key(path) {
+                        // Check if it was provided as a CLI arg
+                        let key = format!("{}-account", snake_to_kebab(path));
+                        if let Some(raw) = args.get(&key) {
+                            match decode_bytes_32(raw) {
+                                Ok(bytes) => {
+                                    println!("  ℹ️  Using --{} for PDA seed '{}'", key, path);
+                                    account_map.insert(path.clone(), AccountId::new(bytes));
+                                }
+                                Err(e) => {
+                                    eprintln!("❌ --{}: {}", key, e);
+                                    process::exit(1);
+                                }
+                            }
+                        } else {
+                            eprintln!(
+                                "❌ PDA '{}' requires account '{}' for seed computation.",
+                                acc.name, path
+                            );
+                            eprintln!(
+                                "   Provide it with: --{} <BASE58|HEX>",
+                                key
+                            );
+                            process::exit(1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Also store parsed args as ParsedValue for arg-based seeds
     let mut parsed_arg_map: HashMap<String, ParsedValue> = HashMap::new();
     for (name, _, val) in &parsed_args {
