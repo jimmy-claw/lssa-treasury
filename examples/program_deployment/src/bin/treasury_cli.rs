@@ -849,7 +849,7 @@ async fn execute_instruction(
 
     let treasury_path = treasury_bin.unwrap_or(program_path);
     let token_path = token_bin.unwrap_or_else(|| {
-        eprintln!("❌ --token-bin is required for --submit");
+        eprintln!("❌ --token-bin is required for submission (use --dry-run to skip)");
         process::exit(1);
     });
 
