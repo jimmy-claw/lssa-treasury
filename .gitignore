@@ -1,4 +1,5 @@
 target/
+methods/guest/target/
 
 # Local treasury state
 .treasury-state
