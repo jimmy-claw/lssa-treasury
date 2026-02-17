@@ -5201,6 +5201,7 @@ dependencies = [
 name = "treasury-examples"
 version = "0.1.0"
 dependencies = [
+ "base58",
  "borsh",
  "clap",
  "nssa",

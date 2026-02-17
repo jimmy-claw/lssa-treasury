@@ -27,6 +27,7 @@
 ///     --authorized-accounts "aabb...00,ccdd...00" \
 ///     --token-definition-account "deadbeef...00"
 
+use base58::FromBase58;
 use nssa::program::Program;
 use nssa::public_transaction::{Message, WitnessSet};
 use nssa::{AccountId, PublicTransaction};
@@ -167,7 +168,7 @@ fn print_help(idl: &NssaIdl) {
             .accounts
             .iter()
             .filter(|a| a.pda.is_none())
-            .map(|a| format!("--{}-account <HEX>", snake_to_kebab(&a.name)))
+            .map(|a| format!("--{}-account <BASE58|HEX>", snake_to_kebab(&a.name)))
             .collect();
 
         let all_args: Vec<String> = args_desc.into_iter().chain(acct_desc).collect();
@@ -497,23 +498,26 @@ fn parse_vec(raw: &str, elem_type: &IdlType) -> Result<ParsedValue, String> {
                 let parts: Vec<&str> = raw.split(',').map(|s| s.trim()).collect();
                 let mut result = Vec::with_capacity(parts.len());
                 for (i, part) in parts.iter().enumerate() {
-                    let hex = part
-                        .strip_prefix("0x")
-                        .or_else(|| part.strip_prefix("0X"))
-                        .unwrap_or(part);
-                    let bytes =
-                        hex_decode(hex).map_err(|e| format!("Element [{}]: {}", i, e))?;
-                    if bytes.len() != size {
-                        return Err(format!(
-                            "Element [{}]: expected {} bytes ({} hex chars), got {} bytes from '{}'",
-                            i,
-                            size,
-                            size * 2,
-                            bytes.len(),
-                            part
-                        ));
+                    if size == 32 {
+                        // For [u8; 32], accept base58 or hex
+                        let bytes = decode_bytes_32(part)
+                            .map_err(|e| format!("Element [{}]: {}", i, e))?;
+                        result.push(bytes.to_vec());
+                    } else {
+                        let hex = part
+                            .strip_prefix("0x")
+                            .or_else(|| part.strip_prefix("0X"))
+                            .unwrap_or(part);
+                        let bytes =
+                            hex_decode(hex).map_err(|e| format!("Element [{}]: {}", i, e))?;
+                        if bytes.len() != size {
+                            return Err(format!(
+                                "Element [{}]: expected {} bytes, got {} from '{}'",
+                                i, size, bytes.len(), part
+                            ));
+                        }
+                        result.push(bytes);
                     }
-                    result.push(bytes);
                 }
                 Ok(ParsedValue::ByteArrayVec(result))
             }
@@ -540,6 +544,39 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
         bytes.push(byte);
     }
     Ok(bytes)
+}
+
+/// Decode a 32-byte value from base58 or hex string.
+fn decode_bytes_32(input: &str) -> Result<[u8; 32], String> {
+    // Try base58 first (if it contains non-hex chars, it's likely base58)
+    if let Ok(bytes) = input.from_base58() {
+        if bytes.len() == 32 {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            return Ok(arr);
+        }
+        return Err(format!(
+            "Base58 decoded to {} bytes, expected 32",
+            bytes.len()
+        ));
+    }
+
+    // Try hex (with optional 0x prefix)
+    let hex = input
+        .strip_prefix("0x")
+        .or_else(|| input.strip_prefix("0X"))
+        .unwrap_or(input);
+    let bytes = hex_decode(hex)?;
+    if bytes.len() == 32 {
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        Ok(arr)
+    } else {
+        Err(format!(
+            "Expected 32 bytes, got {} (provide base58 or 64 hex chars)",
+            bytes.len()
+        ))
+    }
 }
 
 // ─── risc0 Serialization ────────────────────────────────────────
@@ -804,20 +841,8 @@ async fn execute_instruction(
         }
         let key = format!("{}-account", snake_to_kebab(&acc.name));
         let raw = args.get(&key).unwrap();
-        let hex = raw
-            .strip_prefix("0x")
-            .or_else(|| raw.strip_prefix("0X"))
-            .unwrap_or(raw);
-        match hex_decode(hex) {
-            Ok(bytes) if bytes.len() == 32 => parsed_accounts.push((&acc.name, bytes)),
-            Ok(bytes) => {
-                eprintln!(
-                    "❌ --{}: expected 32 bytes (64 hex chars), got {} bytes",
-                    key,
-                    bytes.len()
-                );
-                has_errors = true;
-            }
+        match decode_bytes_32(raw) {
+            Ok(bytes) => parsed_accounts.push((&acc.name, bytes.to_vec())),
             Err(e) => {
                 eprintln!("❌ --{}: {}", key, e);
                 has_errors = true;
