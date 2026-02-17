@@ -1,15 +1,12 @@
 {
-  "version": "0.1.0",
-  "name": "treasury_program",
+  "accounts": [],
+  "errors": [],
   "instructions": [
     {
-      "name": "create_vault",
       "accounts": [
         {
-          "name": "treasury_state_acct",
-          "writable": true,
-          "signer": false,
           "init": true,
+          "name": "treasury_state_acct",
           "pda": {
             "seeds": [
               {
@@ -17,19 +14,19 @@
                 "value": "treasury_state"
               }
             ]
-          }
+          },
+          "signer": false,
+          "writable": true
         },
         {
-          "name": "token_definition",
-          "writable": false,
-          "signer": false,
-          "init": false
-        },
-        {
-          "name": "vault_holding",
-          "writable": false,
-          "signer": false,
           "init": false,
+          "name": "token_definition",
+          "signer": false,
+          "writable": false
+        },
+        {
+          "init": false,
+          "name": "vault_holding",
           "pda": {
             "seeds": [
               {
@@ -37,7 +34,9 @@
                 "path": "token_definition"
               }
             ]
-          }
+          },
+          "signer": false,
+          "writable": false
         }
       ],
       "args": [
@@ -69,16 +68,14 @@
             }
           }
         }
-      ]
+      ],
+      "name": "create_vault"
     },
     {
-      "name": "send",
       "accounts": [
         {
-          "name": "treasury_state_acct",
-          "writable": false,
-          "signer": false,
           "init": false,
+          "name": "treasury_state_acct",
           "pda": {
             "seeds": [
               {
@@ -86,131 +83,100 @@
                 "value": "treasury_state"
               }
             ]
-          }
-        },
-        {
-          "name": "vault_holding",
-          "writable": false,
-          "signer": false,
-          "init": false,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "token_definition"
-              }
-            ]
-          }
-        },
-        {
-          "name": "recipient",
-          "writable": false,
-          "signer": false,
-          "init": false
-        },
-        {
-          "name": "signer",
-          "writable": false,
-          "signer": true,
-          "init": false
-        }
-      ],
-      "args": [
-        {
-          "name": "amount",
-          "type": "u128"
-        },
-        {
-          "name": "token_program_id",
-          "type": "program_id"
-        }
-      ]
-    },
-    {
-      "name": "deposit",
-      "accounts": [
-        {
-          "name": "treasury_state_acct",
-          "writable": false,
-          "signer": false,
-          "init": false,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": "treasury_state"
-              }
-            ]
-          }
-        },
-        {
-          "name": "sender_holding",
-          "writable": false,
-          "signer": false,
-          "init": false
-        },
-        {
-          "name": "vault_holding",
-          "writable": false,
-          "signer": false,
-          "init": false,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "token_definition"
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "amount",
-          "type": "u128"
-        },
-        {
-          "name": "token_program_id",
-          "type": "program_id"
-        }
-      ]
-    }
-  ],
-  "accounts": [
-    {
-      "name": "TreasuryState",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "vault_count",
-            "type": "u64"
           },
-          {
-            "name": "authorized_accounts",
-            "type": {
-              "vec": {
-                "array": [
-                  "u8",
-                  32
-                ]
+          "signer": false,
+          "writable": false
+        },
+        {
+          "init": false,
+          "name": "vault_holding",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "token_definition"
               }
-            }
-          }
-        ]
-      }
-    }
-  ],
-  "errors": [
-    {
-      "code": 6001,
-      "name": "NoAuthorizedAccounts",
-      "msg": "At least one authorized account required"
+            ]
+          },
+          "signer": false,
+          "writable": false
+        },
+        {
+          "init": false,
+          "name": "recipient",
+          "signer": false,
+          "writable": false
+        },
+        {
+          "init": false,
+          "name": "signer",
+          "signer": true,
+          "writable": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u128"
+        },
+        {
+          "name": "token_program_id",
+          "type": "program_id"
+        }
+      ],
+      "name": "send"
     },
     {
-      "code": 1008,
-      "name": "Unauthorized",
-      "msg": "Signer is not authorized"
+      "accounts": [
+        {
+          "init": false,
+          "name": "treasury_state_acct",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "treasury_state"
+              }
+            ]
+          },
+          "signer": false,
+          "writable": false
+        },
+        {
+          "init": false,
+          "name": "sender_holding",
+          "signer": false,
+          "writable": false
+        },
+        {
+          "init": false,
+          "name": "vault_holding",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "token_definition"
+              }
+            ]
+          },
+          "signer": false,
+          "writable": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u128"
+        },
+        {
+          "name": "token_program_id",
+          "type": "program_id"
+        }
+      ],
+      "name": "deposit"
     }
-  ]
+  ],
+  "name": "treasury_program",
+  "types": [],
+  "version": "0.1.0"
 }
