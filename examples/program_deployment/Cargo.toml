@@ -20,7 +20,7 @@ name = "treasury_cli"
 path = "src/bin/treasury_cli.rs"
 
 [dependencies]
-nssa-framework-core = { path = "../../nssa-framework-core" }
+nssa-framework-core = { git = "https://github.com/jimmy-claw/nssa-framework.git" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1.0"
 treasury_core = { path = "../../treasury_core" }

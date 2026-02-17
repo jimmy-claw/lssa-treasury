@@ -3229,6 +3229,7 @@ dependencies = [
 [[package]]
 name = "nssa-framework"
 version = "0.1.0"
+source = "git+https://github.com/jimmy-claw/nssa-framework.git#0dd095f372cb52e6919a523f5f8094ae7bbf3593"
 dependencies = [
  "borsh",
  "nssa-framework-core",
@@ -3239,6 +3240,7 @@ dependencies = [
 [[package]]
 name = "nssa-framework-core"
 version = "0.1.0"
+source = "git+https://github.com/jimmy-claw/nssa-framework.git#0dd095f372cb52e6919a523f5f8094ae7bbf3593"
 dependencies = [
  "borsh",
  "nssa_core",
@@ -3250,6 +3252,7 @@ dependencies = [
 [[package]]
 name = "nssa-framework-macros"
 version = "0.1.0"
+source = "git+https://github.com/jimmy-claw/nssa-framework.git#0dd095f372cb52e6919a523f5f8094ae7bbf3593"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -10,8 +10,8 @@ path = "src/bin/treasury.rs"
 [dependencies]
 treasury_core = { path = "../../treasury_core" }
 nssa_core.workspace = true
-nssa-framework = { path = "../../nssa-framework" }
-nssa-framework-core = { path = "../../nssa-framework-core" }
+nssa-framework = { git = "https://github.com/jimmy-claw/nssa-framework.git" }
+nssa-framework-core = { git = "https://github.com/jimmy-claw/nssa-framework.git" }
 risc0-zkvm.workspace = true
 borsh.workspace = true
 serde.workspace = true
