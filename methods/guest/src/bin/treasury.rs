@@ -21,11 +21,12 @@ mod treasury_program {
     use super::*;
 
     /// Create a new token vault with initial supply.
-    /// Accounts: [treasury_state, token_definition, vault_holding]
     #[instruction]
     pub fn create_vault(
+        #[account(init, pda = literal("treasury_state"))]
         treasury_state_acct: AccountWithMetadata,
         token_definition: AccountWithMetadata,
+        #[account(pda = account("token_definition"))]
         vault_holding: AccountWithMetadata,
         token_name: [u8; 6],
         initial_supply: u128,
@@ -89,12 +90,14 @@ mod treasury_program {
     }
 
     /// Send tokens from the treasury vault to a recipient.
-    /// Accounts: [treasury_state, vault_holding, recipient, signer]
     #[instruction]
     pub fn send(
+        #[account(pda = literal("treasury_state"))]
         treasury_state_acct: AccountWithMetadata,
+        #[account(pda = account("token_definition"))]
         vault_holding: AccountWithMetadata,
         recipient: AccountWithMetadata,
+        #[account(signer)]
         signer: AccountWithMetadata,
         amount: u128,
         token_program_id: ProgramId,
@@ -157,11 +160,12 @@ mod treasury_program {
     }
 
     /// Deposit tokens into the vault from an external sender.
-    /// Accounts: [treasury_state, sender_holding, vault_holding]
     #[instruction]
     pub fn deposit(
+        #[account(pda = literal("treasury_state"))]
         treasury_state_acct: AccountWithMetadata,
         sender_holding: AccountWithMetadata,
+        #[account(pda = account("token_definition"))]
         vault_holding: AccountWithMetadata,
         amount: u128,
         token_program_id: ProgramId,
