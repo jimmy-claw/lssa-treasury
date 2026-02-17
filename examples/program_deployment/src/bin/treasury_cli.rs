@@ -12,8 +12,15 @@
 ///     --authorized-accounts "aabb...(64 hex chars),...(another 64 hex chars)" \
 ///     --token-definition-account "some-account-id"
 ///
-///   # Submit a transaction:
-///   cargo run --bin treasury_cli -- --idl treasury-idl.json --submit \
+///   # Dry run (no submission):
+///   cargo run --bin treasury_cli -- --dry-run --idl treasury-idl.json \
+///     create-vault --token-name "MYTKN0" --initial-supply 1000000 \
+///     --token-program-id "0,0,0,0,0,0,0,0" \
+///     --authorized-accounts "aabb...00,ccdd...00" \
+///     --token-definition-account "deadbeef...00"
+///
+///   # Submit (default — requires --treasury-bin and --token-bin):
+///   cargo run --bin treasury_cli -- --idl treasury-idl.json \
 ///     --treasury-bin artifacts/treasury.bin --token-bin artifacts/token.bin \
 ///     create-vault --token-name "MYTKN0" --initial-supply 1000000 \
 ///     --token-program-id "0,0,0,0,0,0,0,0" \
@@ -35,7 +42,7 @@ async fn main() {
     // Find global flags
     let mut idl_path = "treasury-idl.json".to_string();
     let mut program_path = "artifacts/treasury.bin".to_string();
-    let mut submit = false;
+    let mut dry_run = false;
     let mut treasury_bin: Option<String> = None;
     let mut token_bin: Option<String> = None;
     let mut remaining_args: Vec<String> = vec![args[0].clone()];
@@ -54,8 +61,8 @@ async fn main() {
                     program_path = args[i].clone();
                 }
             }
-            "--submit" => {
-                submit = true;
+            "--dry-run" => {
+                dry_run = true;
             }
             "--treasury-bin" => {
                 i += 1;
@@ -112,7 +119,7 @@ async fn main() {
                         ix,
                         &cli_args,
                         &program_path,
-                        submit,
+                        dry_run,
                         treasury_bin.as_deref(),
                         token_bin.as_deref(),
                     )
@@ -138,9 +145,9 @@ fn print_help(idl: &NssaIdl) {
     println!("OPTIONS:");
     println!("  -i, --idl <FILE>           IDL JSON file [default: treasury-idl.json]");
     println!("  -p, --program <FILE>       Program binary [default: artifacts/treasury.bin]");
-    println!("  --submit                   Actually submit the transaction");
-    println!("  --treasury-bin <FILE>      Treasury program binary (for --submit)");
-    println!("  --token-bin <FILE>         Token program binary (for --submit)");
+    println!("  --dry-run                  Print parsed/serialized data without submitting");
+    println!("  --treasury-bin <FILE>      Treasury program binary (for submission)");
+    println!("  --token-bin <FILE>         Token program binary (for submission)");
     println!();
     println!("COMMANDS:");
     println!("  idl                        Print IDL information");
@@ -704,7 +711,7 @@ async fn execute_instruction(
     ix: &nssa_framework_core::idl::IdlInstruction,
     args: &HashMap<String, String>,
     program_path: &str,
-    submit: bool,
+    dry_run: bool,
     treasury_bin: Option<&str>,
     token_bin: Option<&str>,
 ) {
@@ -833,8 +840,8 @@ async fn execute_instruction(
     println!("    [{}]", hex_words.join(", "));
     println!();
 
-    if !submit {
-        println!("⚠️  Dry run — use --submit to actually submit the transaction.");
+    if dry_run {
+        println!("⚠️  Dry run — omit --dry-run to submit the transaction.");
         return;
     }
 
