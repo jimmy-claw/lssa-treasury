@@ -31,7 +31,7 @@ PDAs are special because:
 
 ### Authority vs Ownership
 
-In NSSA/LEZ, there are two distinct concepts that control who can modify an account:
+In LEZ, there are two distinct concepts that control who can modify an account:
 
 | Concept | Meaning | Who? |
 |---------|---------|------|
@@ -76,7 +76,7 @@ A typical pattern (used in this program):
 ## Project Structure
 
 ```
-lssa-treasury/
+lez-treasury/
 ├── Cargo.toml                    — workspace definition
 ├── README.md                     — this file
 ├── treasury_core/                — shared types (used on-chain and off-chain)
@@ -103,7 +103,7 @@ lssa-treasury/
 
 ### 1. PDA Derivation (`treasury_core/src/lib.rs`)
 
-The core crate provides deterministic PDA computation using `AccountId::from((&ProgramId, &PdaSeed))` — the same mechanism used by the NSSA runtime:
+The core crate provides deterministic PDA computation using `AccountId::from((&ProgramId, &PdaSeed))` — the same mechanism used by the LEZ runtime:
 
 ```rust
 /// Fixed 32-byte seed for the treasury state PDA (padded with zeroes).
@@ -353,7 +353,7 @@ User submits transaction
     │
     ▼
 ┌─────────────────────────────────────────────────────┐
-│  1. NSSA Runtime executes Treasury program           │
+│  1. LEZ Runtime executes Treasury program           │
 │                                                      │
 │     treasury_program::send::send()                   │
 │       ├─ Read vault token holding data               │
@@ -389,7 +389,7 @@ User submits transaction
 
 ## References
 
-- [LSSA Repository](https://github.com/logos-blockchain/lssa) — full framework source
+- [LEZ Repository](https://github.com/logos-blockchain/lssa) — full framework source
 - `programs/amm/` — AMM program (advanced PDA usage: pool + vault + liquidity token PDAs)
 - `programs/token/` — Token program (the program we chain to)
 - `nssa/core/src/program.rs` — core types (`ProgramInput`, `ChainedCall`, `PdaSeed`, etc.)
